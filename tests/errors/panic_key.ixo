@@ -1,0 +1,2 @@
+m = {"a": 1}
+m["b"]   # expect panic: key "b" not found

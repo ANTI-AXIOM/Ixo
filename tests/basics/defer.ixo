@@ -1,0 +1,58 @@
+log = []
+fn work(fail)
+    log.add("open")
+    defer log.add("close")
+    defer
+        log.add("flush")
+    if fail -> return "early"
+    log.add("work")
+    "done"
+
+print(work(false), log)        # expect: done ["open", "work", "flush", "close"]
+log.wipe
+print(work(true), log)         # expect: early ["open", "flush", "close"]
+
+log.wipe
+for i in 0..3
+    defer log.add(f"end {i}")
+    if i == 1 -> continue
+    if i == 2 -> break
+    log.add(f"body {i}")
+print(log)                     # expect: ["body 0", "end 0", "end 1", "end 2"]
+
+log.wipe
+fn risky(x)
+    defer log.add("cleanup")
+    v = (if x > 0 -> x else Error.Neg)?
+    v * 2
+print(risky(2), risky(-1), log)   # expect: 4 Error.Neg ["cleanup", "cleanup"]
+
+log.wipe
+attempts = 0
+fn flaky
+    attempts += 1
+    if attempts < 3 -> return Error.Busy
+    "ok"
+r = flaky() ! err
+    defer log.add("handler")
+    retry
+print(r, log)                  # expect: ok ["handler", "handler"]
+
+log.wipe
+fn nested
+    defer log.add("outer")
+    if true
+        defer log.add("inner")
+        log.add("in block")
+    log.add("after block")
+nested()
+print(log)                     # expect: ["in block", "inner", "after block", "outer"]
+
+fn with_tasks_return
+    out = []
+    with tasks
+        fork fn
+            5.wait
+            out.add("task")
+        return out
+print(with_tasks_return())     # expect: ["task"]

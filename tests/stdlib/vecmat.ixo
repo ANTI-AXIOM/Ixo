@@ -1,0 +1,23 @@
+v = vec(1, 2, 2)
+print(v, v.len, v.dim)                # expect: vec(1.0, 2.0, 2.0) 3.0 3
+u = vec(3, [1, 0, 0])
+print(u + v, v * 2, v - u)            # expect: vec(2.0, 2.0, 2.0) vec(2.0, 4.0, 4.0) vec(0.0, 2.0, 2.0)
+print(u.dot(v), u.cross(vec(0, 1, 0)))  # expect: 1.0 vec(0.0, 0.0, 1.0)
+print(vec(3, 4).unit)                 # expect: vec(0.6, 0.8)
+print(v.x, v.y, v.z, v[1])            # expect: 1.0 2.0 2.0 2.0
+print(vec(0, 0).mix(vec(10, 20), 0.5))  # expect: vec(5.0, 10.0)
+m = mat([2, 2], [1, 2, 3, 4])
+print(m)                              # expect: mat[2x2]([1.0, 2.0], [3.0, 4.0])
+print(m * mat.identity(2) == m)       # expect: true
+print(m.trans)                        # expect: mat[2x2]([1.0, 3.0], [2.0, 4.0])
+print(m.det.round(6))                 # expect: -2.0
+print((m.inv * m)[(0, 0)].round(6))   # expect: 1.0
+print(mat([2, 2], [1, 2, 2, 4]).inv)  # expect: Error.Singular: the matrix can't be inverted (determinant is 0)
+t = mat.translate(vec(1, 2, 3))
+print(t.apply(vec(0, 0, 0)))          # expect: vec(1.0, 2.0, 3.0)
+print(t * vec(1, 1, 1))               # expect: vec(2.0, 3.0, 4.0)
+q = quat.axis(vec(0, 0, 1), math.pi / 2)
+r = q.turn(vec(1, 0, 0))
+print(r.x.abs.round(6), r.y.round(6), r.z.abs.round(6))  # expect: 0.0 1.0 0.0
+print((q * q).turn(vec(1, 0, 0)).x.round(6))              # expect: -1.0
+print(-vec(1, -2))                    # expect: vec(-1.0, 2.0)

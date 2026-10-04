@@ -1,0 +1,32 @@
+# Parallel tasks: `par` runs work on other CPU cores.
+# Each par task has its own memory; arguments and results are copied.
+
+fn count_primes(lo, hi)
+    n = 0
+    for x in lo..hi
+        if x < 2 -> continue
+        prime = true
+        d = 2
+        while d * d <= x
+            if x % d == 0
+                prime = false
+                break
+            d += 1
+        if prime -> n += 1
+    n
+
+limit = 1_000_000
+
+t0 = clock()
+one = count_primes(0, limit)
+serial = clock() - t0
+print(f"serial:   {one} primes in {serial:.2f}s")
+
+# split the range into one chunk per core and run the chunks in parallel
+chunks = cores()
+size = limit / chunks
+t0 = clock()
+tasks = (0..chunks).map(par count_primes((_ * size).int, ((_ + 1) * size).int))
+many = tasks.map(_.await).sum
+parallel = clock() - t0
+print(f"parallel: {many} primes in {parallel:.2f}s on {chunks} cores ({serial / parallel:.1f}x faster)")

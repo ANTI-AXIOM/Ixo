@@ -1,0 +1,7 @@
+flag = [false]
+fork fn
+    flag[0] = true
+n = 0
+while not flag[0]
+    n += 1
+print("finished")                     # expect: finished

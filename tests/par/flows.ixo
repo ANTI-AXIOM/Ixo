@@ -1,0 +1,35 @@
+results = flow(100)
+par fn producer(n, out)
+    for i in 0..n -> i :> out
+    out.close
+producer(5, results)
+total = 0
+for v <: results -> total += v
+print(total)                                    # expect: 10
+
+jobs = flow[int](100)
+out = flow[int](100)
+par fn worker(jobs, out)
+    for j <: jobs -> j * 2 :> out
+with tasks
+    for _ in 0..4 -> worker(jobs, out)
+    for j in 1..=20 -> j :> jobs
+    jobs.close
+out.close
+s = 0
+for v <: out -> s += v
+print(s)                                        # expect: 420
+
+# unbuffered hand-off in both directions
+ping = flow()
+pong = flow()
+par fn echo(inp, outp)
+    for x <: inp -> x + 1 :> outp
+echo(ping, pong)
+for i in 0..3
+    i :> ping
+    print(pong.recv)
+# expect: 1
+# expect: 2
+# expect: 3
+ping.close

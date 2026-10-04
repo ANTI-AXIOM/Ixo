@@ -1,0 +1,19 @@
+# build output
+build/
+*.o
+*.exe
+
+# the old tree-walking prototype, binaries and logs (kept locally for reference)
+archive/
+
+# VS Code extension build
+editors/vscode/node_modules/
+editors/vscode/*.vsix
+
+# files created by tests and examples
+tests/**/_tmp_*
+examples/todo_example.json
+__pycache__/
+
+# WebAssembly builds
+playground/dist/

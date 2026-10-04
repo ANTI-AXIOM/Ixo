@@ -1,0 +1,3 @@
+fn run(bounds)
+    for x in 0..bounds[0] -> print(x)    # expect panic: a range with an open end (like 2..) can only slice
+run([nil])

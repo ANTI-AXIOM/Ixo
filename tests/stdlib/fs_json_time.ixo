@@ -1,0 +1,27 @@
+path = "_tmp_fs_test.txt"
+fs.write(path, "hello\nworld")
+print(fs.read(path))
+# expect: hello
+# expect: world
+print(fs.has(path), fs.size(path))    # expect: true 11
+fs.append(path, "!")
+print(fs.read(path).lines)            # expect: ["hello", "world!"]
+fs.drop(path)
+print(fs.has(path))                   # expect: false
+print(fs.read("does_not_exist.txt").kind)   # expect: NotFound
+content = fs.read("nope.txt") ! err -> "default"
+print(content)                        # expect: default
+
+data = json.parse("""{"name": "Ixo", "tags": ["a", "b"], "n": 3, "pi": 3.5, "ok": true, "none": null}""")
+print(data["name"], data["tags"], data["n"], data["pi"], data["ok"], data["none"])
+# expect: Ixo ["a", "b"] 3 3.5 true nil
+print(json.str({"a": [1, 2], "b": nil}))  # expect: {"a":[1,2],"b":null}
+print(json.parse("{oops").kind)       # expect: InvalidJson
+
+t = now()
+print(t.year > 2000, t.month >= 1 and t.month <= 12)  # expect: true true
+print(type(t))                        # expect: time
+t2 = t.add(3600)
+print(t2 - t)                         # expect: 3600.0
+print(now().show("YYYY").len)         # expect: 4
+print(os.platform in ["windows", "linux", "macos"])  # expect: true

@@ -1,0 +1,63 @@
+fn greet(name)
+    "Hello, " + name
+print(greet("Ixo"))                   # expect: Hello, Ixo
+
+fn clamp(value, lo, hi)
+    if value < lo -> return lo
+    if value > hi -> return hi
+    value
+print(clamp(5, 0, 3), clamp(-1, 0, 3), clamp(2, 0, 3))  # expect: 3 0 2
+
+fn add(a: int, b: int): int
+    a + b
+print(add(2, 3))                      # expect: 5
+
+fn with_default(x, y = 10) = x + y
+print(with_default(1), with_default(1, 2))  # expect: 11 3
+
+fn fact(n) = if n <= 1 -> 1 else n * fact(n - 1)
+print(fact(10))                       # expect: 3628800
+
+fn fib(n)
+    if n < 2 -> return n
+    fib(n - 1) + fib(n - 2)
+print(fib(20))                        # expect: 6765
+
+fn nothing
+    x = 1
+print(nothing())                      # expect: nil
+
+fn say_hi
+    print("hi")
+say_hi                                # expect: hi
+say_hi()                              # expect: hi
+
+print(later(2))                       # expect: 4
+fn later(x) = x * 2
+
+f = add
+print(f(1, 1))                        # expect: 2
+apply = fn(g, v) = g(v)
+print(apply(fn(x) = x + 1, 41))      # expect: 42
+
+fn double(x) = x * 2
+print(5.double, 5.double.double)      # expect: 10 20
+fn scale(x, k) = x * k
+print(3.scale(4))                     # expect: 12
+print([1, 2].len.double)              # expect: 4
+4.print                               # expect: 4
+
+fn count_down(n) = if n == 0 -> 0 else count_down(n - 1)
+print(count_down(10000))              # expect: 0
+
+fn outer(x)
+    fn inner(y) = x + y
+    inner(10)
+print(outer(5))                       # expect: 15
+
+fn stub
+fn typed_stub(x: int): int
+print(stub())                         # expect: nil
+
+fn many(a, b = a * 2, c = b + 1) = [a, b, c]
+print(many(1), many(1, 5), many(1, 2, 3))  # expect: [1, 2, 3] [1, 5, 6] [1, 2, 3]

@@ -1,0 +1,16 @@
+nums = (0..200_000).list
+t = clock()
+a = nums.map(_ * 2)
+print("map", clock() - t)
+t = clock()
+b = a.keep(_ % 3 == 0)
+print("keep", clock() - t)
+t = clock()
+c = b.fold(0, _a + _b)
+print("fold", clock() - t)
+t = clock()
+d = nums.sort(_b < _a)
+print("sort cmp", clock() - t)
+t = clock()
+e = nums.sort
+print("sort plain", clock() - t)

@@ -1,0 +1,9 @@
+# a big map with string keys
+fn run(n)
+    m = {}
+    for i in 0..n -> m[f"key{i}"] = i
+    hits = 0
+    for i in 0..n by 3
+        if m.has(f"key{i}") -> hits += 1
+    print(m.len, hits, m["key12345"])
+run(500_000)

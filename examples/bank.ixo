@@ -1,0 +1,52 @@
+# Classes, error values, `!` handlers, `?` propagation and retry.
+
+class Account(owner: str, balance: float = 0)
+    history = []
+
+    fn deposit*(amount: float)
+        if amount <= 0 -> return Error.InvalidAmount(f"can't deposit {amount}")
+        self.balance += amount
+        self.history.add(("deposit", amount))
+        self.balance
+
+    fn withdraw*(amount: float)
+        if amount > self.balance
+            return Error.InsufficientFunds(f"{self.owner} has only {self.balance}")
+        self.balance -= amount
+        self.history.add(("withdraw", amount))
+        self.balance
+
+    fn str = f"{self.owner}: {self.balance:.2f}"
+
+fn transfer(from: Account, to: Account, amount: float)
+    from.withdraw(amount)?
+    to.deposit(amount)?
+    f"moved {amount} from {from.owner} to {to.owner}"
+
+alice = Account("Alice", 100)
+bob = Account("Bob")
+
+print(transfer(alice, bob, 30))
+print(transfer(alice, bob, 500))
+print(alice, "|", bob)
+
+# Handle an error inline with a fallback value
+result = bob.deposit(-5) ! err -> 0
+print(f"deposit result: {result}")
+
+# Handle it with a block and inspect the error
+alice.withdraw(1000) ! err
+    print(f"failed ({err.kind}): {err.msg}")
+
+# Retry: a flaky operation that succeeds on the third try
+attempts = 0
+fn flaky_fetch
+    attempts += 1
+    if attempts < 3 -> return Error.Timeout("server busy")
+    "data"
+
+data = flaky_fetch() ! err -> retry 3, 10ms
+print(f"got {data} after {attempts} attempts")
+
+for (kind, amount) in alice.history
+    print(f"  {kind:>8} {amount:6.2f}")

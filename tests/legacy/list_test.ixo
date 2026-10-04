@@ -1,0 +1,6 @@
+l = []
+l.push(10)
+l.push(20)
+print("List:", l)          # expect: List: [10, 20]
+print("Pop:", l.pop())     # expect: Pop: 20
+print("Final:", l)         # expect: Final: [10]

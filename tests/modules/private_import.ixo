@@ -1,0 +1,1 @@
+in lib.geometry use secret   # expect error: it exists but is private

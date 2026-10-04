@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ixo Playground</title>
+<meta name="description" content="Write and run Ixo programs in the browser.">
+<script src="coi-serviceworker.js"></script>
+<script src="examples.js"></script>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --border: #dedee3;
+    --accent: #5b4bdb; --accent-text: #ffffff; --err: #c4302b; --ok: #2e7d4f; --gutter: #a0a0a8;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141417; --panel: #1c1c21; --text: #e8e8ec; --muted: #9a9aa3; --border: #2e2e36;
+      --accent: #8b7dff; --accent-text: #111114; --err: #ff6b63; --ok: #5fd08e; --gutter: #5c5c66;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141417; --panel: #1c1c21; --text: #e8e8ec; --muted: #9a9aa3; --border: #2e2e36;
+    --accent: #8b7dff; --accent-text: #111114; --err: #ff6b63; --ok: #5fd08e; --gutter: #5c5c66;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; font-weight: 650; letter-spacing: .2px; }
+  header .spacer { flex: 1; }
+  button, select {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; cursor: pointer; min-height: 32px;
+  }
+  button:hover, select:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  kbd { font: 11px var(--mono); color: var(--muted); margin-left: 4px; }
+  button.primary kbd { color: inherit; opacity: .75; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+  .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .pane + .pane { border-left: 1px solid var(--border); }
+  .label {
+    font-size: 12px; color: var(--muted); padding: 6px 16px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  .editor { flex: 1; display: flex; min-height: 0; background: var(--panel); }
+  .gutter {
+    font: 13px/1.5 var(--mono); color: var(--gutter); text-align: right; padding: 12px 8px 12px 12px;
+    user-select: none; overflow: hidden; white-space: pre; min-width: 3.2em;
+  }
+  textarea {
+    font: 13px/1.5 var(--mono); color: var(--text); background: transparent; border: 0; outline: 0;
+    resize: none; tab-size: 4; white-space: pre; overflow: auto;
+  }
+  #code { flex: 1; padding: 12px 12px 12px 4px; }
+  #stdin {
+    height: 64px; padding: 8px 16px; border-top: 1px solid var(--border); background: var(--panel); width: 100%;
+  }
+  #out {
+    flex: 1; margin: 0; padding: 12px 16px; overflow: auto; font: 13px/1.5 var(--mono);
+    white-space: pre-wrap; word-break: break-word; background: var(--panel);
+  }
+  #out .err { color: var(--err); }
+  #out .note { color: var(--muted); }
+  #status { font-variant-numeric: tabular-nums; }
+  #status.ok { color: var(--ok); }
+  #status.fail { color: var(--err); }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
+    .pane + .pane { border-left: 0; border-top: 1px solid var(--border); }
+    header h1 { width: 100%; }
+    kbd { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ixo Playground</h1>
+  <select id="examples" aria-label="Examples"></select>
+  <span class="spacer"></span>
+  <button id="fmt" title="Format (Shift+Alt+F)">Format</button>
+  <button id="share" title="Copy a link to this program">Share</button>
+  <button id="stop" disabled>Stop</button>
+  <button id="run" class="primary">Run<kbd>Ctrl+Enter</kbd></button>
+</header>
+<main>
+  <section class="pane">
+    <div class="label"><span>main.ixo</span><span id="pos"></span></div>
+    <div class="editor">
+      <div class="gutter" id="gutter" aria-hidden="true">1</div>
+      <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Code"></textarea>
+    </div>
+    <textarea id="stdin" spellcheck="false" placeholder="Input for input(), one value per line" aria-label="Input"></textarea>
+  </section>
+  <section class="pane">
+    <div class="label"><span>Output</span><span id="status"></span></div>
+    <pre id="out" aria-live="polite"></pre>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const code = $("code"), gutter = $("gutter"), out = $("out"), status = $("status");
+const examples = window.IXO_EXAMPLES || { "hello": 'print("Hello from Ixo!")\n' };
+const STORE = "ixo-playground-code";
+let worker = null;
+
+// ------------------------------------------------------------- editor
+let gutterLines = 0;
+function updateGutter() {
+  const n = code.value.split("\n").length;
+  if (n !== gutterLines) gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join("\n");
+  gutterLines = n;
+  gutter.scrollTop = code.scrollTop;
+}
+function updatePos() {
+  const before = code.value.slice(0, code.selectionStart);
+  const line = before.split("\n").length, col = before.length - before.lastIndexOf("\n");
+  $("pos").textContent = `Ln ${line}, Col ${col}`;
+}
+function save() {
+  try { localStorage.setItem(STORE, code.value); } catch (_) {}
+}
+function setCode(text) {
+  code.value = text;
+  updateGutter();
+  save();
+}
+// Replaces the selection like typing would, so undo still works.
+function insert(text) {
+  if (!document.execCommand("insertText", false, text)) code.setRangeText(text, code.selectionStart, code.selectionEnd, "end");
+}
+const BLOCK = /^(fn|if|elif|else|for|while|match|class|interface|enum|select|loop|test|par fn)\b/;
+code.addEventListener("keydown", (e) => {
+  const v = code.value, s = code.selectionStart, end = code.selectionEnd;
+  const lineStart = v.lastIndexOf("\n", s - 1) + 1;
+  if (e.key === "Tab") {
+    e.preventDefault();
+    if (s === end && !e.shiftKey) return insert("    ");
+    // indent / dedent the selected lines
+    const blockEnd = v.indexOf("\n", end - (end > s && v[end - 1] === "\n" ? 1 : 0));
+    const stop = blockEnd < 0 ? v.length : blockEnd;
+    const lines = v.slice(lineStart, stop).split("\n");
+    const changed = lines.map((l) => (e.shiftKey ? l.replace(/^ {1,4}/, "") : "    " + l)).join("\n");
+    code.setSelectionRange(lineStart, stop);
+    insert(changed);
+    code.setSelectionRange(lineStart, lineStart + changed.length);
+  } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    const line = v.slice(lineStart, s);
+    let indent = line.match(/^ */)[0];
+    const t = line.trim();
+    // a block header (fn tick, if x > 3, else) opens a block; `else print(x)` doesn't
+    if (BLOCK.test(t) && !/ = |->/.test(t) && !/^else\s+\S/.test(t)) indent += "    ";
+    insert("\n" + indent);
+  } else if (e.key === "Backspace" && s === end && s > lineStart) {
+    const before = v.slice(lineStart, s);
+    if (/^ +$/.test(before) && before.length % 4 === 0) {
+      e.preventDefault();
+      code.setSelectionRange(s - 4, s);
+      insert("");
+    }
+  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    run("run");
+  } else if (e.key === "F" && e.shiftKey && e.altKey) {
+    e.preventDefault();
+    run("fmt");
+  }
+});
+code.addEventListener("input", () => { updateGutter(); save(); });
+code.addEventListener("scroll", () => { gutter.scrollTop = code.scrollTop; });
+for (const ev of ["keyup", "click", "select"]) code.addEventListener(ev, updatePos);
+
+// ------------------------------------------------------------- running
+function print(text, cls) {
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text;
+  out.appendChild(span);
+  out.scrollTop = out.scrollHeight;
+}
+function setRunning(on) {
+  $("run").disabled = on;
+  $("fmt").disabled = on;
+  $("stop").disabled = !on;
+}
+function stop(note) {
+  if (worker) worker.terminate();
+  worker = null;
+  setRunning(false);
+  if (note) {
+    print("\n" + note + "\n", "note");
+    status.textContent = note;
+    status.className = "fail";
+  }
+}
+function run(cmd) {
+  stop();
+  if (cmd === "run") out.textContent = "";
+  status.textContent = cmd === "run" ? "running…" : "formatting…";
+  status.className = "";
+  setRunning(true);
+  worker = new Worker("runner.js");
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === "out" && cmd === "run") print(m.text);
+    else if (m.type === "err") print(m.text, "err");
+    else if (m.type === "formatted") setCode(m.source);
+    else if (m.type === "fatal") { print(m.text + "\n", "err"); stop(); status.textContent = "failed"; status.className = "fail"; }
+    else if (m.type === "exit") {
+      stop();
+      if (cmd === "fmt") {
+        status.textContent = m.code === 0 ? "formatted" : "can't format (syntax errors)";
+      } else {
+        status.textContent = (m.code === 0 ? "done" : `exit code ${m.code}`) + ` · ${m.ms} ms`;
+      }
+      status.className = m.code === 0 ? "ok" : "fail";
+    }
+  };
+  worker.onerror = (e) => { print(String(e.message || e) + "\n", "err"); stop(); };
+  worker.postMessage({ cmd, source: code.value, stdin: $("stdin").value });
+}
+$("run").onclick = () => run("run");
+$("fmt").onclick = () => run("fmt");
+$("stop").onclick = () => stop("stopped");
+
+// ------------------------------------------------------------- examples & sharing
+const sel = $("examples");
+sel.add(new Option("Examples…", ""));
+for (const name of Object.keys(examples)) sel.add(new Option(name, name));
+sel.onchange = () => {
+  if (sel.value) setCode(examples[sel.value]);
+  sel.value = "";
+  code.focus();
+};
+function encode(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function decode(s) {
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+}
+$("share").onclick = async () => {
+  const url = location.href.split("#")[0] + "#code=" + encode(code.value);
+  history.replaceState(null, "", url);
+  try {
+    await navigator.clipboard.writeText(url);
+    status.textContent = "link copied";
+  } catch (_) {
+    status.textContent = "link in the address bar";
+  }
+  status.className = "";
+};
+
+let initial = null;
+const m = location.hash.match(/^#code=([\w-]+)/);
+if (m) { try { initial = decode(m[1]); } catch (_) {} }
+if (initial === null) { try { initial = localStorage.getItem(STORE); } catch (_) {} }
+if (!initial) initial = examples["hello"] || Object.values(examples)[0];
+setCode(initial);
+updatePos();
+if (!window.crossOriginIsolated) {
+  print("Getting ready… (if this stays, the page needs the COOP/COEP headers or a reload)\n", "note");
+} else if (new URLSearchParams(location.search).has("run")) {
+  run("run");  // ?run: run the program as the page opens (for shared links)
+}
+</script>
+</body>
+</html>

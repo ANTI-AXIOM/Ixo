@@ -1,0 +1,38 @@
+class Vec(x, y)
+    fn +(o) = Vec(self.x + o.x, self.y + o.y)
+    fn -(o) = Vec(self.x - o.x, self.y - o.y)
+    fn -() = Vec(-self.x, -self.y)
+    fn *(k) = Vec(self.x * k, self.y * k)
+    fn ==(o) = self.x == o.x and self.y == o.y
+    fn str = f"<{self.x}, {self.y}>"
+
+a = Vec(1, 2)
+b = Vec(3, 4)
+print((a + b).str)                    # expect: <4, 6>
+print((b - a).str)                    # expect: <2, 2>
+print((-a).str)                       # expect: <-1, -2>
+print((a * 3).str)                    # expect: <3, 6>
+print(a == Vec(1, 2), a != b)         # expect: true true
+c = a
+c += b
+print(c.str, a.str)                   # expect: <4, 6> <1, 2>
+
+class Money(cents)
+    fn <(o) = self.cents < o.cents
+    fn ==(o) = self.cents == o.cents
+    fn str = f"${self.cents / 100}"
+
+xs = [Money(500), Money(125), Money(300)]
+print(xs.sort.map(_.cents))           # expect: [125, 300, 500]
+print(Money(1) < Money(2), Money(3) >= Money(3), Money(4) > Money(9))  # expect: true true false
+print(xs.max.cents)                   # expect: 500
+
+class Grid(w, h)
+    cells = {}
+    fn [](p) = self.cells.get(p, 0)
+    fn []=(p, v)
+        self.cells[p] = v
+
+g = Grid(3, 3)
+g[(1, 2)] = 7
+print(g[(1, 2)], g[(0, 0)])           # expect: 7 0

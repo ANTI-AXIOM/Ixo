@@ -1,0 +1,27 @@
+attempts = 0
+fn flaky
+    attempts += 1
+    if attempts < 3 -> return Error.Busy("try again")
+    f"ok after {attempts}"
+
+result = flaky() ! err
+    retry
+print(result, attempts)               # expect: ok after 3 3
+
+attempts = 0
+limited = flaky() ! err
+    retry 1
+    "gave up"
+print(limited, attempts)              # expect: gave up 2
+
+attempts = 0
+t0 = clock()
+slow = flaky() ! err -> retry 20ms
+print(slow)                           # expect: ok after 3
+print(clock() - t0 >= 0.035)          # expect: true
+
+attempts = 0
+both = flaky() ! err
+    retry 5, 1ms
+    "never"
+print(both)                           # expect: ok after 3

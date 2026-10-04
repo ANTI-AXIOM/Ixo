@@ -1,0 +1,8 @@
+fn sleeper(k)
+    50ms.wait
+    k
+ts = []
+for k in 0..100_000 -> ts.add(fork sleeper(k))
+total = 0
+for t in ts -> total += t.await
+print(total)

@@ -1,0 +1,13 @@
+fn count_primes(hi)
+    n = 0
+    for x in 2..hi
+        prime = true
+        d = 2
+        while d * d <= x
+            if x % d == 0
+                prime = false
+                break
+            d += 1
+        if prime -> n += 1
+    n
+print(count_primes(300_000))

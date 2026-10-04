@@ -1,0 +1,7 @@
+words = []
+for i in 0..200_000
+    words.add(f"w{i % 1000}")
+counts = {}
+for w in words
+    counts[w] = counts.get(w, 0) + 1
+print(counts.len, words.join(",").len)

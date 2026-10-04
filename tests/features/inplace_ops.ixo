@@ -1,0 +1,24 @@
+# fn +=(o) changes the object itself; without it, a += b is a = a + b
+class Bag
+    items = []
+    fn +=(x)
+        items.add(x)
+    fn -=(x)
+        items.remove(x)
+b = Bag()
+same = b
+b += 1
+b += 2
+b -= 1
+print(b.items, same is b)        # expect: [2] true
+class V(x)
+    fn +(o) = V(x + o.x)
+v = V(1)
+w = v
+v += V(2)
+print(v.x, w.x, v is w)          # expect: 3 1 false
+n = 5
+n += 2
+n -= 1
+n *= 3
+print(n)                         # expect: 18

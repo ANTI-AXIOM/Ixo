@@ -1,0 +1,13 @@
+# map / filter / reduce pipelines and calling closures
+fn compose(f, g) = fn(x) = g(f(x))
+
+fn run(n)
+    nums = (0..n).list
+    evens = nums.map(_ * 3).keep(_ % 2 == 0)
+    s = evens.fold(0, _a + _b)
+    big = nums.count(_ > n // 2)
+    step = compose(fn(x) = x + 1, fn(x) = x * 2)
+    t = 0
+    for x in nums -> t += step(x)
+    print(evens.len, s, big, t)
+run(1_000_000)

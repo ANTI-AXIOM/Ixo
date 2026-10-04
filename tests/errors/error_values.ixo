@@ -1,0 +1,41 @@
+fn divide(a, b)
+    if b == 0 -> return Error.DivByZero("can't divide by zero")
+    a / b
+
+r = divide(10, 2)
+print(r)                              # expect: 5.0
+bad = divide(1, 0)
+print(bad)                            # expect: Error.DivByZero: can't divide by zero
+print(bad.kind, bad.msg)              # expect: DivByZero can't divide by zero
+print(is_error(bad), is_error(r))     # expect: true false
+
+v = divide(1, 0) ! err -> -1
+print(v)                              # expect: -1
+w = divide(8, 4) ! err -> -1
+print(w)                              # expect: 2.0
+
+x = divide(1, 0) ! e
+    print("handling", e.kind)         # expect: handling DivByZero
+    0
+print(x)                              # expect: 0
+
+fn safe_ratio(a, b)
+    q = divide(a, b)?
+    q * 100
+print(safe_ratio(1, 4))               # expect: 25.0
+print(safe_ratio(1, 0))               # expect: Error.DivByZero: can't divide by zero
+
+e = error("plain")
+print(e)                              # expect: Error: plain
+print(Error.NotFound)                 # expect: Error.NotFound
+wrapped = Error.Failed(e)
+print(wrapped.cause)                  # expect: Error: plain
+print(int("42"), int("x") ! _ -> 0)   # expect: 42 0
+if error("x") -> print("truthy") else print("errors are falsy")  # expect: errors are falsy
+print(Error.NotFound == Error.NotFound, Error.A == Error.B)  # expect: true false
+
+fn read_config(path)
+    text = fs.read(path)?
+    text.len
+res = read_config("definitely_missing.cfg")
+print(res.kind)                       # expect: NotFound

@@ -1,0 +1,44 @@
+m = {"a": 1, "b": 2}
+m["c"] = 3
+print(m)                              # expect: {"a": 1, "b": 2, "c": 3}
+print(m["a"], m.get("z"), m.get("z", 0))  # expect: 1 nil 0
+print(m.keys, m.values)               # expect: ["a", "b", "c"] [1, 2, 3]
+print(m.pairs)                        # expect: [("a", 1), ("b", 2), ("c", 3)]
+print(m.len, "a" in m, m.has("q"))    # expect: 3 true false
+m.drop("b")
+print(m)                              # expect: {"a": 1, "c": 3}
+m["a"] += 10
+print(m["a"])                         # expect: 11
+print({} == {}, {1: 2} == {1: 2})     # expect: true true
+counts = {}
+for w in "a b a c a".cut
+    counts[w] = counts.get(w, 0) + 1
+print(counts)                         # expect: {"a": 3, "b": 1, "c": 1}
+print(m.keep(fn(k, v) = v > 5))      # expect: {"a": 11}
+m.each(print(_a, _b))
+# expect: a 11
+# expect: c 3
+t = {(0, 0): "origin"}
+print(t[(0, 0)])                      # expect: origin
+k = {1: "int", 1.0: "float"}
+print(k)                              # expect: {1: "float"}
+print(m.map(fn(k, v) = f"{k}={v}"))  # expect: ["a=11", "c=3"]
+
+s = {1, 2, 3}
+s.add(2)
+s.add(4)
+print(s, s.len)                       # expect: {1, 2, 3, 4} 4
+print(s.has(2), 5 in s)               # expect: true false
+s.drop(1)
+print(s)                              # expect: {2, 3, 4}
+print({1, 2} | {2, 3}, {1, 2} & {2, 3}, {1, 2} - {2, 3})  # expect: {1, 2, 3} {2} {1}
+print(set([1, 1, 2]), set())          # expect: {1, 2} set()
+
+tup = (1, "two", 3.0)
+print(tup, tup[1], tup.len)           # expect: (1, "two", 3.0) two 3
+x, y, z = tup
+print(x, y, z)                        # expect: 1 two 3.0
+print((1,), ())                       # expect: (1,) ()
+print((1, 2) == (1, 2), (1, 2) < (1, 3))  # expect: true true
+merged = {"a": 1} + {"b": 2}
+print(merged)                         # expect: {"a": 1, "b": 2}

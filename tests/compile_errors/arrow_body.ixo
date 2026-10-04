@@ -1,0 +1,1 @@
+fn f(x): x * 2   # expect error: write a one-line body with '='

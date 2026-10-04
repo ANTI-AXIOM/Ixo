@@ -1,0 +1,6 @@
+class Box(value)
+    fn init
+        self.size = 1
+    fn grow
+        self.extra = 2      # expect error: Box has no field 'extra'
+b = Box(1)

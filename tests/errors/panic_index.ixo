@@ -1,0 +1,2 @@
+l = [1]
+print(l[5])   # expect panic: index 5 is out of range for a list of length 1

@@ -1,0 +1,9 @@
+par fn work(k)
+    s = 0
+    for i in 0..200_000 -> s += (i * k) % 7
+    s
+ts = []
+for k in 0..8 -> ts.add(work(k))
+total = 0
+for t in ts -> total += t.await
+print(total)

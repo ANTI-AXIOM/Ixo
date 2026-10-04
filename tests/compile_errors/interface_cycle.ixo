@@ -1,0 +1,1 @@
+interface Loop is Loop          # expect error: an interface can't extend itself

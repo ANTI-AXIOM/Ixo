@@ -1,0 +1,20 @@
+use lib.geometry
+print(area(2, 3))
+print(geometry.area(4, 5))
+r = Rect(2, 5)
+print(r.area, r.peek)
+print(helper_uses_secret(1))
+in lib.geometry use area as surface
+print(surface(3, 3))
+use math
+print(floor(2.7), pi > 3)
+use json as j
+print(j.str([1]))
+# expect: geometry loaded
+# expect: 6
+# expect: 20
+# expect: 10 42
+# expect: 2
+# expect: 9
+# expect: 2 true
+# expect: [1]

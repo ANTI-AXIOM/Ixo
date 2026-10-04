@@ -1,0 +1,36 @@
+# Concurrency: forked tasks connected by flows (channels).
+
+fn is_prime(n)
+    if n < 2 -> return false
+    for d in 2..=n.sqrt.int
+        if n % d == 0 -> return false
+    true
+
+numbers = flow[int](100)
+primes = flow[int](100)
+
+# `fork fn`: every call starts a new task
+fork fn worker(id, input, output)
+    for n <: input
+        if is_prime(n) -> n :> output
+
+fork fn producer(limit, out)
+    for n in 1..=limit -> n :> out
+    out.close
+
+producer(200, numbers)
+
+# structured concurrency: the block waits for every task forked inside it
+with tasks
+    for id in 1..=4
+        fork worker(id, numbers, primes)
+primes.close
+
+found = []
+for p <: primes -> found.add(p)
+print(f"{found.len} primes below 200")
+print(found.sort.slice(0, 10))
+
+# fork returns a task you can await
+t = fork fn = (1..=1000).sum
+print(f"sum computed in a task: {t.await}")

@@ -1,0 +1,11 @@
+# A small module. Only names marked with * are exported.
+
+fn mean*(xs) = xs.sum / xs.len
+
+fn variance*(xs)
+    m = mean(xs)
+    xs.map((_ - m) ** 2).sum / xs.len
+
+fn stddev*(xs) = variance(xs).sqrt
+
+fn helper(x) = x  # private: not visible to importers

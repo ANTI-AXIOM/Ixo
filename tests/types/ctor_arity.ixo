@@ -1,0 +1,2 @@
+class Point(x, y)
+Point(1)   # expect error: Point() takes 2 arguments but 1 was given

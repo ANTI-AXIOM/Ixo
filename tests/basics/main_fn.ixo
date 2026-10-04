@@ -1,0 +1,4 @@
+print("top level runs first")         # expect: top level runs first
+
+fn main
+    print("then main")                # expect: then main

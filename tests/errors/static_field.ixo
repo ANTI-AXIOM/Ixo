@@ -1,0 +1,2 @@
+class A
+A().foo   # expect error: A has no field or method 'foo'

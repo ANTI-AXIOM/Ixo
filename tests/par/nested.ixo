@@ -1,0 +1,19 @@
+# par tasks can fork concurrent tasks, sleep, and start more par tasks
+fn inner(x) = x * 10
+par fn outer(x)
+    a = fork inner(x)
+    b = par inner(x + 1)
+    5.wait
+    a.await + b.await
+print(outer(1).await)                           # expect: 30
+
+counter = [0]
+par fn modify
+    counter[0] = 99
+    counter[0]
+print(modify().await, counter[0])               # expect: 99 0
+
+par fn sum_to(n) = (1..=n).sum
+parts = (1..=4).map(sum_to(_ * 1000))
+print(parts.map(_.await))                       # expect: [500500, 2001000, 4501500, 8002000]
+print(cores() >= 1)                             # expect: true

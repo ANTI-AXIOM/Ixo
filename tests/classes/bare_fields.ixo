@@ -1,0 +1,50 @@
+# Inside a method, fields and methods are used by their bare names.
+class Account(owner, balance)
+    history = []
+    fn deposit(n)
+        balance += n
+        history.add(n)
+    fn describe = f"{owner}: {balance} ({history.len} deposits)"
+    fn double_all
+        history = history.map(_ * 2)    # assigns the field
+        balance = history.sum
+    fn later = fn() = balance          # lambdas see the fields too
+    fn shadow(balance) = balance       # parameters come first
+a = Account("ann", 0)
+a.deposit(5)
+a.deposit(7)
+print(a.describe)                       # expect: ann: 12 (2 deposits)
+a.double_all
+print(a.balance, a.history)             # expect: 24 [10, 14]
+f = a.later
+print(f(), a.shadow(1))                 # expect: 24 1
+
+class Player
+    hp = 10
+    fn init(name)
+        self.name = name                # init may add fields
+        title = "sir"                   # a local
+    fn hit(d)
+        hp -= d
+        if not alive -> print(f"{name} is down")
+    fn alive = hp > 0
+p = Player("Bo")
+p.hit(4)
+p.hit(6)                                # expect: Bo is down
+print(p.hp)                             # expect: 0
+
+interface Shape
+    fn area
+    fn describe = f"area {area}"        # a required method, by its bare name
+class Square(side) is Shape
+    fn area = side * side
+print(Square(3).describe)               # expect: area 9
+
+enum Temp
+    C(v)
+    F(v)
+    fn celsius = match self
+        Temp.C(v) -> v
+        Temp.F(v) -> (v - 32) * 5 / 9
+    fn warm = celsius > 20              # an enum method by its bare name
+print(Temp.C(25).warm, Temp.F(50).warm)  # expect: true false

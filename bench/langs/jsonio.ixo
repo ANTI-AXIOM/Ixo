@@ -1,0 +1,14 @@
+# encode and decode JSON records
+fn run(n)
+    records = []
+    for i in 0..n
+        records.add({"id": i, "name": f"user{i}", "tags": ["a", "b", f"t{i % 7}"], "score": i * 0.25 + 0.125, "ok": i % 3 == 0})
+    text = json.str(records)
+    back = json.parse(text)
+    ids = 0
+    oks = 0
+    for r in back
+        ids += r["id"]
+        if r["ok"] -> oks += 1
+    print(text.len, back.len, ids, oks)
+run(100_000)

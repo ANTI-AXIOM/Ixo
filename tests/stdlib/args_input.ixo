@@ -1,0 +1,7 @@
+# args: alpha beta
+# stdin: first line
+# stdin: second line
+print(args)                           # expect: ["alpha", "beta"]
+print(input())                        # expect: first line
+print(input("> "))                    # expect: > second line
+print(input())                        # expect: nil

@@ -1,0 +1,30 @@
+# Classes with constructor parameters, pattern matching on classes.
+
+class Circle(r: float)
+class Rect(w: float, h: float)
+class Triangle(a: float, b: float, c: float)
+
+fn area(shape)
+    match shape
+        Circle(r) -> math.pi * r * r
+        Rect(w, h) -> w * h
+        Triangle(a, b, c)
+            s = (a + b + c) / 2
+            (s * (s - a) * (s - b) * (s - c)).sqrt
+        _ -> 0.0
+
+fn describe(shape) = match shape
+    Circle(r) if r > 10 -> "a big circle"
+    Circle -> "a circle"
+    Rect(w, h) if w == h -> "a square"
+    Rect -> "a rectangle"
+    _ -> "some shape"
+
+shapes = [Circle(1), Rect(2, 3), Rect(4, 4), Triangle(3, 4, 5), Circle(12)]
+for s in shapes
+    print(f"{describe(s):<14} area {area(s):8.2f}")
+
+total = shapes.sum_by(area(_))
+print(f"total area: {total:.1f}")
+biggest = shapes.max_by(area(_))
+print(f"biggest: {describe(biggest)}")

@@ -1,0 +1,2 @@
+fn f(a) = a
+f(1, 2)   # expect error: f() takes 1 argument but 2 were given

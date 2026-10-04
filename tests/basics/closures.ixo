@@ -1,0 +1,53 @@
+fn make_counter
+    count = 0
+    fn inc()
+        count += 1
+        count
+    return inc
+c = make_counter()
+c()
+c()
+print(c())                            # expect: 3
+c2 = make_counter()
+print(c2())                           # expect: 1
+
+fn adder(n) = fn(x) = x + n
+add5 = adder(5)
+print(add5(10))                       # expect: 15
+
+x = 1
+get_x = fn = x
+x = 2
+print(get_x())                        # expect: 2
+
+score = 0
+fn add_point
+    score += 10
+add_point()
+add_point()
+print(score)                          # expect: 20
+
+total = 5
+fn shadow
+    total = 100
+    total
+print(shadow(), total)                # expect: 100 5
+
+fn outer
+    n = 0
+    bump = fn()
+        n = n + 1
+    bump()
+    bump()
+    n
+print(outer())                        # expect: 2
+
+fn make_pair
+    value = 0
+    get = fn = value
+    set = fn(v)
+        value = v
+    (get, set)
+g, s = make_pair()
+s(42)
+print(g())                            # expect: 42

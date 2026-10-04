@@ -1,0 +1,2 @@
+ch = flow()
+v <: ch   # expect panic: deadlock

@@ -1,0 +1,31 @@
+fn save(path, overwrite = false, backup = true)
+    f"{path} overwrite={overwrite} backup={backup}"
+
+print(save("a.txt"))                          # expect: a.txt overwrite=false backup=true
+print(save("a.txt", backup: false))           # expect: a.txt overwrite=false backup=false
+print(save(path: "b.txt", overwrite: true))   # expect: b.txt overwrite=true backup=true
+print(save("c.txt", true, backup: false))     # expect: c.txt overwrite=true backup=false
+
+class Window(title, width = 800, height = 600)
+    fn area = self.width * self.height
+    fn resize(width = self.width, height = self.height)
+        Window(self.title, width, height)
+
+w = Window("main", height: 100)
+print(w.width, w.height, w.area)              # expect: 800 100 80000
+print(w.resize(height: 50).area)              # expect: 40000
+
+class Point
+    fn init(x, y)
+        self.x = x
+        self.y = y
+p = Point(y: 2, x: 1)
+print(p.x, p.y)                               # expect: 1 2
+
+fn wrap(text, width: int = 10): str = text.pad(width) + "|"
+print(wrap("hi", width: 4))                   # expect: hi  |
+
+f = fn(a, b = 2) = a * b
+print(f(b: 5, a: 3))                          # expect: 15
+
+print(["b", "a"].map(fn(s, suffix = "!") = s + suffix))  # expect: ["b!", "a!"]

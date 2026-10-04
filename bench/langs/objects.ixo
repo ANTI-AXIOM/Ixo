@@ -1,0 +1,14 @@
+# allocate many small objects, keep them in a list, call methods
+class Point(x, y)
+    fn dist2(o) = (x - o.x) * (x - o.x) + (y - o.y) * (y - o.y)
+    fn moved(dx, dy) = Point(x + dx, y + dy)
+
+fn run(n)
+    pts = []
+    for i in 0..n -> pts.add(Point(i % 100, i % 37))
+    total = 0
+    for i in 1..n -> total += pts[i].dist2(pts[i - 1])
+    p = Point(0, 0)
+    for i in 0..n -> p = p.moved(1, 2)
+    print(total, p.x, p.y)
+run(1_000_000)

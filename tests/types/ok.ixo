@@ -1,0 +1,37 @@
+# A well-typed program: the checker must not complain about any of this.
+class Vec2(x: float, y: float)
+    fn add(o: Vec2): Vec2 = Vec2(self.x + o.x, self.y + o.y)
+    fn len: float = (self.x * self.x + self.y * self.y).sqrt
+
+fn total(items: list[int]): int
+    sum = 0
+    for i in items -> sum += i
+    sum
+
+fn find(names: list[str], target: str): int?
+    for i, n in names
+        if n == target -> return i
+    nil
+
+fn parse(s: str): int ! Error
+    n = s.int
+    if is_error(n) -> return Error.Bad("not a number: " + s)
+    n
+
+v = Vec2(3, 4).add(Vec2(0, 0))
+print(v.len)                         # expect: 5.0
+print(total([1, 2, 3]))              # expect: 6
+print(find(["a", "b"], "b"), find([], "z"))  # expect: 1 nil
+print(parse("12"), parse("x").kind)  # expect: 12 Bad
+counts: map[str, int] = {}
+counts["a"] = 1
+print(counts)                        # expect: {"a": 1}
+maybe: int? = nil
+maybe = 5
+print(maybe + 1)                     # expect: 6
+fn apply(f: fn(int) -> int, x: int): int = f(x)
+print(apply(_ * 3, 7))               # expect: 21
+nums = [3, 1, 2]
+print(nums.sort.map(_ + 1).len)      # expect: 3
+text = fs.read("missing.txt") ! e -> "fallback"
+print(text.up)                       # expect: FALLBACK

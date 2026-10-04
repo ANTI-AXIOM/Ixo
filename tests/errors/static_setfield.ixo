@@ -1,0 +1,3 @@
+class P(x)
+p = P(1)
+p.z = 3   # expect error: P has no field 'z'

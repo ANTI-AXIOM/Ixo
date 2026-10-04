@@ -1,0 +1,40 @@
+kept = []
+before = memory()
+for frame in 0..20
+    @arena
+        scratch = []
+        for i in 0..5000 -> scratch.add([i, i * 2])
+        kept.add(scratch.len)
+        if frame == 3 -> kept.add(scratch[10])
+print(kept.len, kept[4])                     # expect: 21 [10, 20]
+print(memory() - before < 1_000_000)         # expect: true
+
+@arena -> print([1, 2, 3].map(_ * 2))        # expect: [2, 4, 6]
+
+fn build(n)
+    @arena
+        parts = (0..n).map(str(_))
+        return parts.join(",")
+print(build(5))                              # expect: 0,1,2,3,4
+
+fn load_level(n)
+    @cache levels
+        if not levels.has(n) -> levels.set(n, f"level {n} data")
+        levels.get(n)
+print(load_level(1), load_level(2), load_level(1))   # expect: level 1 data level 2 data level 1 data
+
+fn frame_count
+    @cache stats
+        stats.set("frames", stats.get("frames", 0) + 1)
+        stats.get("frames")
+frame_count()
+frame_count()
+print(frame_count())                         # expect: 3
+
+fn render
+    @dual buffers = []
+        buffers.current.add("frame")
+        buffers.swap
+        [buffers.current.len, buffers.other.len]
+print(render(), render(), render())          # expect: [0, 1] [1, 1] [1, 2]
+print(gc())                                  # expect: true

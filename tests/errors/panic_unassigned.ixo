@@ -1,0 +1,4 @@
+fn f
+    print(v)
+    v = 1
+f()   # expect panic: 'v' is used before it has a value

@@ -1,0 +1,10 @@
+# number to text formatting and parsing back
+fn run(n)
+    total = 0
+    back = 0.0
+    for i in 0..n
+        s = f"{i}:{i * 0.5:.2f}|{i % 13}"
+        total += s.len
+        back += float(s.cut("|")[0].cut(":")[1])
+    print(total, back)
+run(300_000)

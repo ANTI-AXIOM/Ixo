@@ -1,0 +1,36 @@
+# Float arithmetic and comparisons in machine code match the interpreter
+# (tests/tools/jit_check.py runs this with and without the JIT).
+$jit
+fn mix(n)
+    t = 0.5
+    for i in 0..n
+        t = t * 1.01 + i / 4 - 0.25
+        if t > 100.0 -> t = t / 3
+    t
+print(mix(300).round(6))                          # expect: 37.373425
+
+nan = 0.0 / 0.0
+$jit
+fn cmps(x, y) = [x < y, x <= y, x > y, x >= y, x == y, x != y]
+print(cmps(1.5, 2), cmps(2, 1.5), cmps(nan, 1.0))
+# expect: [true, true, false, false, false, true] [false, false, true, true, false, true] [false, false, false, false, false, true]
+
+$jit
+fn count_below(xs, limit)
+    c = 0
+    for x in xs
+        if x < limit -> c += 1
+    c
+print(count_below([0.5, 1, 2.5, nan, -1], 1.5))   # expect: 3
+
+$jit
+fn div(a, b) = a / b
+print(div(7, 2), div(1.0, 0.0), div(-1, 4.0))     # expect: 3.5 inf -0.25
+class P(x, y)
+    fn len2 = x * x + y * y
+$jit
+fn total(ps)
+    s = 0.0
+    for p in ps -> s += p.len2
+    s
+print(total([P(3, 4), P(0.5, 0.5)]))              # expect: 25.5

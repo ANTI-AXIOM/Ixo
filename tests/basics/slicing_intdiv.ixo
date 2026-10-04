@@ -1,0 +1,26 @@
+xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+print(xs[0..10 by 2])               # expect: [0, 2, 4, 6, 8]
+print(xs[1..=7 by 3])               # expect: [1, 4, 7]
+print(xs[.. by -1])                 # expect: [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+print(xs[7..], xs[..3])           # expect: [7, 8, 9] [0, 1, 2]
+print(xs[-3..])                   # expect: [7, 8, 9]
+print(xs[8..2 by -2])               # expect: [8, 6, 4]
+print("hello"[.. by -1], "abcdef"[.. by 2])   # expect: olleh ace
+print((1, 2, 3, 4)[1.. by 2])       # expect: (2, 4)
+
+print(7 // 2, -7 // 2, 7 // -2)   # expect: 3 -4 -4
+print(7.5 // 2)                   # expect: 3.0
+n = 17
+print(n // 5 * 5 + n % 5 == n)    # expect: true
+
+fn describe(p) = match p
+    {"type": "circle", "r": r} -> f"circle {r}"
+    {"type": "rect", "w": w, "h": h} -> f"rect {w}x{h}"
+    {"name": name} -> f"named {name}"
+    {} -> "some map"
+    _ -> "not a map"
+
+print(describe({"type": "circle", "r": 2}))          # expect: circle 2
+print(describe({"type": "rect", "w": 3, "h": 4}))    # expect: rect 3x4
+print(describe({"name": "x", "extra": true}))       # expect: named x
+print(describe({"other": 1}), describe(5))          # expect: some map not a map

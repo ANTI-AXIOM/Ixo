@@ -1,0 +1,18 @@
+jobs = flow[int](10)
+results = flow[int](10)
+
+fork fn worker(id, jobs, results)
+    for job <: jobs
+        job * job :> results
+
+for i in 1..=3
+    worker(i, jobs, results)
+
+for j in 1..=5 -> j :> jobs
+jobs.close
+
+total = 0
+for _ in 1..=5
+    r <: results
+    total += r
+print(total)                          # expect: 55

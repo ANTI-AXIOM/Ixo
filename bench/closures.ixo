@@ -1,0 +1,4 @@
+nums = (0..200_000).list
+total = nums.map(_ * 2).keep(_ % 3 == 0).fold(0, _a + _b)
+sorted = nums.sort(_b < _a).slice(0, 3)
+print(total, sorted)

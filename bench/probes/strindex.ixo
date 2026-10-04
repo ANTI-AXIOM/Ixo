@@ -1,0 +1,7 @@
+fn run(n)
+    s = "abcdefghij" * (n // 10)
+    count = 0
+    for i in 0..s.len
+        if s[i] == "e" -> count += 1
+    print(s.len, count)
+run(200_000)

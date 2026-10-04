@@ -1,0 +1,34 @@
+s = "Hello, World"
+print(s.len)                          # expect: 12
+print(s.up, s.down)                   # expect: HELLO, WORLD hello, world
+print("  pad  ".trim + "|")           # expect: pad|
+print(s.cut(", "))                    # expect: ["Hello", "World"]
+print("a b  c".cut)                   # expect: ["a", "b", "c"]
+print("a,b,,c".cut(","))              # expect: ["a", "b", "", "c"]
+print(", ".join(["x", "y", "z"]))     # expect: x, y, z
+print(["x", 1, true].join("-"))       # expect: x-1-true
+print(s.has("World"), s.starts("Hell"), s.ends("d"))  # expect: true true true
+print(s.find("o"), s.find("zzz"))     # expect: 4 nil
+print(s.replace("l", "L"))            # expect: HeLLo, WorLd
+print("ab".repeat(3), "ab" * 2)       # expect: ababab abab
+print(s[0], s[-1], s[0..5])          # expect: H d Hello
+print("héllo".len, "héllo"[1])        # expect: 5 é
+print("abc".rev, "hello"[1..=3])      # expect: cba ell
+print("quote: \"hi\"")                # expect: quote: "hi"
+print("line1\nline2".lines)           # expect: ["line1", "line2"]
+print("42".num + 1, "3.5".num * 2)    # expect: 43 7.0
+print("abc".num)                      # expect: Error.InvalidNumber: 'abc' is not a number
+print("x" in "xyz", "q" not in "xyz")  # expect: true true
+print("apple" < "banana")             # expect: true
+print("hi".chars)                     # expect: ["h", "i"]
+print(ord("A"), chr(97), 65.chr)      # expect: 65 a A
+print("5".pad(3) + "|", "5".pad(-3) + "|")  # expect: 5  |   5|
+multi = """first line
+second line"""
+print(multi)
+# expect: first line
+# expect: second line
+print("abc" + "def", "abc" == "abc")  # expect: abcdef true
+print("tab\there".cut("\t"))          # expect: ["tab", "here"]
+print("\u{48}\x49")                   # expect: HI
+print("12".int + "3".int, "2.5".float)  # expect: 15 2.5

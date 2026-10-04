@@ -1,0 +1,20 @@
+name = "Ixo"
+age = 3
+print(f"{name} is {age} years old")   # expect: Ixo is 3 years old
+print(f"{age * 2 + 1}")               # expect: 7
+print(f"{{braces}}")                  # expect: {braces}
+pi = 3.14159265
+print(f"{pi:.2f}")                    # expect: 3.14
+print(f"[{name:>6}]")                 # expect: [   Ixo]
+print(f"[{name:<6}]")                 # expect: [Ixo   ]
+print(f"[{name:^7}]")                 # expect: [  Ixo  ]
+print(f"[{42:05}]")                   # expect: [00042]
+print(f"{1234567:,}")                 # expect: 1,234,567
+print(f"{0.25:.1%}")                  # expect: 25.0%
+print(f"{255:x}")                     # expect: ff
+print(f"{[1, 2]} {(1, 2)} {nil}")     # expect: [1, 2] (1, 2) nil
+d = {"k": "v"}
+print(f"{d["k"]}")                    # expect: v
+print(f"{name.up}!")                  # expect: IXO!
+print(f"no interpolation")            # expect: no interpolation
+print(f"{3.0}")                       # expect: 3.0

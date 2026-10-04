@@ -1,0 +1,15 @@
+# sorting numbers, sorting objects by a key, custom comparator
+class Item(key, name)
+
+fn run(n)
+    x = 7
+    nums = []
+    for i in 0..n
+        x = (x * 1103515245 + 12345) % 2147483648
+        nums.add(x % 1_000_000)
+    a = nums.sort
+    items = nums.slice(0, n // 4).map(Item(_, "i"))
+    b = items.sort_by(_.key)
+    c = nums.slice(0, n // 4).sort(_a > _b)
+    print(a[0], a[n // 2], a[n - 1], b[0].key, b[b.len - 1].key, c[0])
+run(500_000)

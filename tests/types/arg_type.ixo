@@ -1,0 +1,2 @@
+fn f(a: int) = a
+f("s")   # expect error: argument 1 of f() should be int, got str

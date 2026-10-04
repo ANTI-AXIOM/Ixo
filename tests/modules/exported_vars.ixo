@@ -1,0 +1,4 @@
+use lib.settings
+print(limit, names.len, next_limit, settings.limit)    # expect: 10 2 11 10
+in lib.settings use limit as cap
+print(cap * 2)                                          # expect: 20

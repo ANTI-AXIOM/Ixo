@@ -1,0 +1,1 @@
+for x in 0..2.5 -> print(x)          # expect panic: range end must be a whole number, got 2.5

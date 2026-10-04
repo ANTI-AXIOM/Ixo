@@ -1,0 +1,10 @@
+# Comparators like _a < _b and _a.age > _b.age sort directly; others call the lambda.
+xs = [5, 3, 9, 1, 3]
+print(xs.sort(_a < _b), xs.sort(_b < _a), xs.sort(_a > _b), xs.sort(_a >= _b))
+# expect: [1, 3, 3, 5, 9] [9, 5, 3, 3, 1] [9, 5, 3, 3, 1] [9, 5, 3, 3, 1]
+class P(name, age)
+ps = [P("a", 30), P("b", 20), P("c", 30), P("d", 10)]
+print(ps.sort(_a.age < _b.age).map(_.name), ps.sort(_b.age < _a.age).map(_.name))
+# expect: ["d", "b", "a", "c"] ["a", "c", "b", "d"]
+print(["b", "a", "c"].sort(_b < _a), [2.5, 1, 3].sort(_a < _b))   # expect: ["c", "b", "a"] [1, 2.5, 3]
+print(xs.sort(_a % 4 < _b % 4))                                     # expect: [5, 9, 1, 3, 3]

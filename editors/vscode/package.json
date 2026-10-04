@@ -1,0 +1,186 @@
+{
+  "name": "ixo-lang",
+  "displayName": "Ixo",
+  "description": "Ixo language support: syntax highlighting, errors as you type, hover, go to definition, find references, rename, signature help, completion, formatting and debugging.",
+  "version": "0.6.0",
+  "publisher": "ixo-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Linters",
+    "Debuggers"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ixo",
+        "aliases": [
+          "Ixo",
+          "ixo"
+        ],
+        "extensions": [
+          ".ixo"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ixo",
+        "scopeName": "source.ixo",
+        "path": "./syntaxes/ixo.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Ixo",
+      "properties": {
+        "ixo.path": {
+          "type": "string",
+          "default": "ixo",
+          "description": "Path to the ixo executable (used for the language server and for running files)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "ixo.run",
+        "title": "Ixo: Run File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ixo.watch",
+        "title": "Ixo: Run File and Watch for Changes"
+      },
+      {
+        "command": "ixo.debug",
+        "title": "Ixo: Debug File",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "ixo.profile",
+        "title": "Ixo: Profile File"
+      },
+      {
+        "command": "ixo.test",
+        "title": "Ixo: Run @test Functions in File"
+      },
+      {
+        "command": "ixo.restartServer",
+        "title": "Ixo: Restart Language Server"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "ixo.run",
+          "when": "editorLangId == ixo",
+          "group": "navigation"
+        },
+        {
+          "command": "ixo.debug",
+          "when": "editorLangId == ixo",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "ixo.run",
+        "key": "ctrl+f5",
+        "when": "editorLangId == ixo"
+      }
+    ],
+    "configurationDefaults": {
+      "[ixo]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "ixo"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "ixo",
+        "label": "Ixo",
+        "languages": [
+          "ixo"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The .ixo file to run.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Command-line arguments (the program's `args`).",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory.",
+                "default": "${workspaceFolder}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop on the first line.",
+                "default": false
+              },
+              "noTypecheck": {
+                "type": "boolean",
+                "description": "Skip the static type checker.",
+                "default": false
+              },
+              "test": {
+                "type": "string",
+                "description": "Debug this @test function of the program instead of running it."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "ixo",
+            "request": "launch",
+            "name": "Debug current Ixo file",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Ixo: Launch",
+            "description": "Debug an Ixo program",
+            "body": {
+              "type": "ixo",
+              "request": "launch",
+              "name": "Debug ${1:file}",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.2"
+  }
+}

@@ -1,0 +1,3 @@
+fn f(n): int
+    if n > 0 -> return "x"   # expect error: f should return int, but this returns str
+    0

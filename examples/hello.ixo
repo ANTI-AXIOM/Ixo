@@ -1,0 +1,36 @@
+# A quick tour of Ixo. Run with:  ixo examples/hello.ixo
+
+print("Hello from Ixo!")
+
+# Variables and f-strings
+name = "Ixo"
+year = 2026
+print(f"{name} says hi in {year}")
+
+# Functions: no colons, no braces; the last expression is the result
+fn greet(who, greeting = "Hello")
+    f"{greeting}, {who}!"
+
+print(greet("world"))
+print(greet("Ada", "Welcome"))
+
+# One-line functions and optional types
+fn square(x: int): int = x * x
+print(square(12))
+
+# Postfix calls: any function can be called like a method (UFCS)
+print(16.sqrt, 2.pow(10), "shout".up)
+print(5.square)
+
+# Lists and lambdas with the universal underscore
+nums = [4, 8, 15, 16, 23, 42]
+print(nums.keep(_ % 2 == 0).map(_ * 10))
+print(nums.fold(0, _a + _b))
+
+# if is an expression
+kind = if nums.len > 5 -> "long" else "short"
+print(f"the list is {kind}")
+
+# Loops over ranges, with a step
+for i in 0..10 by 3
+    print(i)

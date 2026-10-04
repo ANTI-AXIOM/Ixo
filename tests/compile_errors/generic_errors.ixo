@@ -1,0 +1,5 @@
+class Box[T](value: T)
+    fn get: T = self.value
+b = Box(1)
+s: str = b.get                # expect error: can't assign a int to 's' (declared as str)
+x: Box[str] = Box(5)          # expect error: can't assign a Box[int] to 'x' (declared as Box[str])

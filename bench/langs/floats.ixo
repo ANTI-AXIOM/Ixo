@@ -1,0 +1,14 @@
+# a big list of floats: mean and spread
+fn run(n)
+    xs = []
+    x = 0.5
+    for i in 0..n
+        x = (x * 3.9) * (1.0 - x)
+        xs.add(x)
+    mean = 0.0
+    for v in xs -> mean += v
+    mean /= xs.len
+    spread = 0.0
+    for v in xs -> spread += (v - mean) * (v - mean)
+    print(f"{mean:.6f} {(spread / xs.len).sqrt:.6f}")
+run(2_000_000)

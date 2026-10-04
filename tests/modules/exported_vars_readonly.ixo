@@ -1,0 +1,2 @@
+use lib.settings
+limit = 5    # expect error: 'limit' comes from lib.settings; only lib.settings can change it

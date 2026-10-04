@@ -1,0 +1,67 @@
+# for x in a list walks it by position (no iterator object); other sequences
+# keep their iterators. Results are the same as before.
+xs = [1, 2, 3]
+seen = []
+for x in xs
+    if x == 1 -> xs.add(4)           # items added while walking are seen
+    seen.add(x)
+print(seen)                          # expect: [1, 2, 3, 4]
+
+ys = [1, 2, 3, 4]
+out = []
+for y in ys
+    if y == 2 -> ys.take()           # the end moves in
+    out.add(y)
+print(out)                           # expect: [1, 2, 3]
+
+total = 0
+for x in [5, 6, 7, 8, 9]
+    if x == 6 -> continue
+    if x == 9 -> break
+    total += x
+print(total)                         # expect: 20
+
+pairs = []
+for a in [1, 2]
+    for b in ["x", "y"] -> pairs.add(f"{a}{b}")
+print(pairs)                         # expect: ["1x", "1y", "2x", "2y"]
+
+chars = []
+for c in "héllo" -> chars.add(c)
+print(chars)                         # expect: ["h", "é", "l", "l", "o"]
+keys = []
+for k in {"a": 1, "b": 2} -> keys.add(k)
+print(keys)                          # expect: ["a", "b"]
+tup = 0
+for t in (1, 2, 3) -> tup += t
+print(tup)                           # expect: 6
+r = 0..4
+rs = []
+for v in r -> rs.add(v)
+print(rs)                            # expect: [0, 1, 2, 3]
+
+# a flow: the loop waits for each value
+ch = flow()
+fn produce(c)
+    for i in 0..3 -> i * 10 :> c
+    c.close
+fork produce(ch)
+got = []
+for v in ch -> got.add(v)
+print(got)                           # expect: [0, 10, 20]
+
+# the inlined helpers walk lists the same way
+nums = [1, 2, 3, 4, 5, 6]
+print(nums.map(_ * 2).keep(_ > 4), nums.fold(0, _a + _b), nums.any(_ > 5), nums.count(_ % 2 == 0))
+# expect: [6, 8, 10, 12] 21 true 3
+print((0..5).map(_ * _), "ab".map(_.up))   # expect: [0, 1, 4, 9, 16] ["A", "B"]
+
+# a long loop over a list (machine code)
+fn sum_list(ls)
+    s = 0
+    for v in ls -> s += v
+    s
+print(sum_list((0..100_000).list))   # expect: 4999950000
+
+odd = [5, "x"][0]
+for x in odd -> print(x)             # expect panic: can't loop over a int

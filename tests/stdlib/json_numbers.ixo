@@ -1,0 +1,21 @@
+# numbers in JSON: ints stay exact, floats use the shortest text that reads back the same
+print(json.str([1, -2, 9007199254740993, 0.1, 2.5, 1.0, 1e300, 0.1 + 0.2]))
+# expect: [1,-2,9007199254740993,0.1,2.5,1,1e+300,0.30000000000000004]
+back = json.parse("[9007199254740993, 0.1, -0, 1e2, 2.5e-3, 12345678901234567890]")
+print(back)                                      # expect: [9007199254740993, 0.1, 0, 100, 0.0025, 12345678901234567168.0]
+print(back[0] + 1, back[1] * 2)                  # expect: 9007199254740994 0.2
+print(json.str({"a": [1, {"b": "x\ny"}], "c": nil}))  # expect: {"a":[1,{"b":"x\ny"}],"c":null}
+print(json.str({1: "one", "k": [true, false]}))   # expect: {"1":"one","k":[true,false]}
+u = "\\u"
+print(json.parse("{" + "\"q\": \"" + u + "00e9" + u + "d83d" + u + "de00\"}")["q"])   # expect: é😀
+print(json.parse("[1, 2").kind, json.parse("[1] x").kind)     # expect: InvalidJson InvalidJson
+print(json.str([1, [2, 3]], 2))
+# expect: [
+# expect:   1,
+# expect:   [
+# expect:     2,
+# expect:     3
+# expect:   ]
+# expect: ]
+print(float("2.5") + float("1e3"), int("42"), int("0x1F"), int("1_000"), " 7 ".num)   # expect: 1002.5 42 31 1000 7
+print(f"{3.14159:.2f} {2.5:e} {1234.5:g} {0.25:%}")   # expect: 3.14 2.500000e+00 1234.5 25%

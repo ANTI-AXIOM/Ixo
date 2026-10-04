@@ -1,0 +1,2 @@
+l = [1, 2]
+l.add(1, 2)   # expect error: takes 1 argument but 2 were given

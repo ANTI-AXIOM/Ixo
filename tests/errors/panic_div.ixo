@@ -1,0 +1,2 @@
+print("before")    # expect: before
+print(1 / 0)       # expect panic: division by zero

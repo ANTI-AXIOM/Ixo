@@ -1,0 +1,8 @@
+fn make(k) = fn(x) = x + k
+fn run(n)
+    fs = []
+    for i in 0..n -> fs.add(make(i))
+    s = 0
+    for f in fs -> s += f(1)
+    print(fs.len, s)
+run(500_000)

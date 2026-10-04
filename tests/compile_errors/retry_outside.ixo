@@ -1,0 +1,1 @@
+retry   # expect error: 'retry' can only be used inside an error handler

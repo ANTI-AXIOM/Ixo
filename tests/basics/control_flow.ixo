@@ -1,0 +1,44 @@
+x = 5
+if x > 3
+    print("big")                      # expect: big
+else
+    print("small")
+
+if x < 3 -> print("a")
+elif x < 10 -> print("b")             # expect: b
+else print("c")
+
+status = if x == 5 -> "five" else "other"
+print(status)                         # expect: five
+
+grade = if x > 8 -> "A"
+        elif x > 4 -> "B"
+        else "C"
+print(grade)                          # expect: B
+
+y = if false -> 1
+print(y)                              # expect: nil
+
+label = match x
+    1 -> "one"
+    5 -> "five"
+    _ -> "many"
+print(label)                          # expect: five
+
+n = 0
+while n < 3
+    n++
+print(n)                              # expect: 3
+
+print(nil or "default")               # expect: default
+print(0 and "yes")                    # expect: yes
+print(false or nil)                   # expect: nil
+print(not nil, not 0, not true)          # expect: true false false
+print(1 < 2 and 2 < 3, 1 > 2 or 2 > 1)  # expect: true true
+
+z = if x > 0
+    a = x * 2
+    a + 1
+else
+    0
+print(z)                              # expect: 11

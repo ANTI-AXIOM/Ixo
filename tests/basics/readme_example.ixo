@@ -1,0 +1,17 @@
+# The example at the top of README.md.
+class Point(x, y)
+    fn len = (self.x ** 2 + self.y ** 2).sqrt
+
+points = [Point(3, 4), Point(1, 1), Point(6, 8)]
+far = points.keep(_.len > 2).map(_.len)
+print(far)                                  # expect: [5.0, 10.0]
+
+fn parse_port(text: str): int ! Error
+    n = text.int ! _ -> return Error.BadPort(f"not a number: {text}")
+    if n < 1 or n > 65535 -> return Error.BadPort(f"out of range: {n}")
+    n
+
+port = parse_port("80o") ! err
+    print(err.msg)                          # expect: not a number: 80o
+    8080
+print(port, parse_port("443"))              # expect: 8080 443

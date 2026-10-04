@@ -1,0 +1,12 @@
+print(math.pi.round(5), math.sqrt(16), math.floor(2.9), math.gcd(12, 18))  # expect: 3.14159 4.0 2 6
+print(math.clamp(15, 0, 10), math.hypot(3, 4))  # expect: 10 5.0
+print(max(3, 9, 2), min(3, 9, 2), abs(-4), sqrt(9))  # expect: 9 2 4 3.0
+print(0.5.sin.round(4), 2.ln.round(4), 100.log)  # expect: 0.4794 0.6931 2.0
+r = rng(42)
+a = r.int(1, 100)
+print(a == rng(42).int(1, 100))       # expect: true
+x = rng.float
+print(x >= 0 and x < 1)               # expect: true
+print([1, 2, 3].has(rng.pick([1, 2, 3])))  # expect: true
+print(rng.mix([3, 1, 2]).sort)        # expect: [1, 2, 3]
+print(int(3.9), float(2), str(1.5), bool(nil), type(1..2))  # expect: 3 2.0 1.5 false range

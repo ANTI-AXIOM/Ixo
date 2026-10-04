@@ -1,0 +1,2 @@
+x = 5
+x()   # expect error: can't call a int value

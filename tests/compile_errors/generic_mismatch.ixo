@@ -1,0 +1,2 @@
+fn first(xs: list[T]): T = xs[0]
+n: str = first([1, 2, 3])   # expect error: can't assign a int to 'n' (declared as str)

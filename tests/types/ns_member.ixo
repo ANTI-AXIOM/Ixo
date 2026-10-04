@@ -1,0 +1,1 @@
+fs.reed("x")   # expect error: fs has no member 'reed' (did you mean 'read'?)

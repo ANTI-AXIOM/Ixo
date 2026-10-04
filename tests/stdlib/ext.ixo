@@ -1,0 +1,38 @@
+# re (raw strings keep backslashes as they are)
+print(re.test(r"\d+", "abc 42"), re.test("^x", "abc"))      # expect: true false
+m = re.find(r"(\w+)@(\w+)", "mail ann@home now")
+print(m["text"], m["start"], m["groups"])                   # expect: ann@home 5 ["ann", "home"]
+print(re.find_all(r"\d+", "1 22 333"))                      # expect: ["1", "22", "333"]
+print(re.find_all(r"(\w)=(\d)", "a=1 b=2"))                 # expect: [("a", "1"), ("b", "2")]
+print(re.replace(r"(\d+)", "a1b22", "<$1>"))                # expect: a<1>b<22>
+print(re.replace(r"\d+", "a1b22", fn(s) = str(s.int * 2)))  # expect: a2b44
+print(re.split(r",\s*", "a, b,c"))                          # expect: ["a", "b", "c"]
+print(re.escape("1.5+x"), r"C:\temp\new")                   # expect: 1\.5\+x C:\temp\new
+bad = re.test("(", "x") ! e -> e.kind
+print(bad)                                                  # expect: BadPattern
+
+# time
+t = time(2024, 2, 29, 13, 5, 9)
+print(t.show("YYYY-MM-DD HH:mm:ss"), t.date, t.day_of_year)  # expect: 2024-02-29 13:05:09 2024-02-29 60
+print(t.add_days(1).date, t.start_of_day.show("HH:mm"))     # expect: 2024-03-01 00:00
+u = time.utc(2024, 1, 1)
+print(u.iso(true), time.parse("2024-01-01T00:00:00Z").unix == u.unix)  # expect: 2024-01-01T00:00:00Z true
+p = time.parse("01/02/2023 07:30", "DD/MM/YYYY HH:mm")
+print(p.year, p.month, p.day, p.hour, p.min)                # expect: 2023 2 1 7 30
+print(time.parse("2024-13-01") ! e -> e.kind)               # expect: InvalidTime
+print(time.parse("2024-05-01T10:00:00+02:00").unix == time.utc(2024, 5, 1, 8).unix)  # expect: true
+print(time(2024, 1, 2).diff(time(2024, 1, 1)))              # expect: 86400.0
+
+# csv
+rows = csv.parse("name,age\nAnn,31\n\"Smith, Bo\",40\n")
+print(rows.len, rows[1]["name"], rows[0]["age"])            # expect: 2 Smith, Bo 31
+print(csv.parse("a;b\n1;2", false, ";"))                    # expect: [["a", "b"], ["1", "2"]]
+print(csv.format([["x", "y,z"], [1, "q\"t"]]).trim)
+# expect: x,"y,z"
+# expect: 1,"q""t"
+print(csv.format([{"a": 1, "b": 2}]).trim)
+# expect: a,b
+# expect: 1,2
+
+# os
+print(os.script.ends("ext.ixo"), fs.has(os.script_dir))  # expect: true true

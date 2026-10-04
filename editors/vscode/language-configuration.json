@@ -1,0 +1,83 @@
+{
+  "comments": {
+    "lineComment": "#",
+    "blockComment": [
+      "\"\"\"",
+      "\"\"\""
+    ]
+  },
+  "brackets": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "{",
+      "}"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "'",
+      "close": "'",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "{",
+      "}"
+    ],
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "'",
+      "'"
+    ]
+  ],
+  "folding": {
+    "offSide": true
+  },
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*!?|-?\\d+(\\.\\d+)?",
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*((fork\\s+)?fn\\b[^=]*|(class|if|elif|else|for|while|match|with)\\b(?!.*->)[^#]*|@\\w+.*|.*(!\\s*\\w*|->|=\\s*match\\b.*|\\bfn\\s*\\(.*\\)))\\s*(#.*)?$",
+    "decreaseIndentPattern": "^\\s*(elif|else)\\b"
+  }
+}

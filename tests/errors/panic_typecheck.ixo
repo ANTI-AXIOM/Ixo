@@ -1,0 +1,4 @@
+fn half(n: int) = n / 2
+vals = [4, "x"]
+print(half(vals[0]))   # expect: 2.0
+half(vals[1])   # expect panic: argument 'n' of half should be int, got str

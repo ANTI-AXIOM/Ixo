@@ -1,0 +1,56 @@
+# for x in a..b counts without a range object; the results match ranges
+fn collect(a, b)
+    out = []
+    for x in a..b -> out.add(x)
+    out
+print(collect(0, 5))                 # expect: [0, 1, 2, 3, 4]
+print(collect(3, 3))                 # expect: []
+print(collect(5, 2))                 # expect: []
+
+xs = []
+for x in 1..=4 -> xs.add(x)
+print(xs)                            # expect: [1, 2, 3, 4]
+
+ys = []
+for x in 10..0 by -3 -> ys.add(x)
+print(ys)                            # expect: [10, 7, 4, 1]
+
+zs = []
+for x in 10..=1 by -3 -> zs.add(x)
+print(zs)                            # expect: [10, 7, 4, 1]
+
+# whole floats count as ints, like ranges
+ws = []
+for x in 0.0..3.0 -> ws.add(x)
+print(ws)                            # expect: [0, 1, 2]
+
+# changing the loop variable doesn't change the counting
+seen = []
+for x in 0..3
+    seen.add(x)
+    x = 100
+print(seen)                          # expect: [0, 1, 2]
+
+# break, continue and nested loops
+total = 0
+for i in 0..10
+    if i == 7 -> break
+    if i % 2 == 0 -> continue
+    for j in i..i + 2 -> total += j
+print(total)                         # expect: 21
+
+# the bounds are evaluated once
+n = 3
+count = 0
+for i in 0..n
+    n = 10
+    count += 1
+print(count)                         # expect: 3
+
+# a long loop (compiled to machine code)
+fn sum_to(k)
+    s = 0
+    for i in 0..k by 2 -> s += i
+    s
+print(sum_to(100_000))               # expect: 2499950000
+print((0..10 by 2).list)             # expect: [0, 2, 4, 6, 8]

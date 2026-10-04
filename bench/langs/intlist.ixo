@@ -1,0 +1,11 @@
+# a big list of ints kept in memory
+fn run(n)
+    xs = []
+    for i in 0..n -> xs.add(i * 7919 % 1_000_003)
+    total = 0
+    big = 0
+    for x in xs
+        total += x
+        if x > big -> big = x
+    print(xs.len, total, big)
+run(5_000_000)

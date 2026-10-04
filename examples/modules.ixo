@@ -1,0 +1,8 @@
+# Importing a module: `use` brings in everything exported, `in ... use` picks names.
+
+use lib.stats
+in lib.stats use stddev as sd
+
+data = [2, 4, 4, 4, 5, 5, 7, 9]
+print(f"mean {mean(data)}, variance {variance(data)}, stddev {sd(data)}")
+print(stats.mean([1, 2, 3]))

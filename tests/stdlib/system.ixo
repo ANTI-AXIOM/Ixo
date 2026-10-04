@@ -1,0 +1,34 @@
+# Processes, C libraries and sockets: not in the browser build.
+# skip on: wasm
+
+# os.exec
+cmd = if os.platform == "windows" -> ["cmd", "/c", "echo hi"] else ["sh", "-c", "echo hi"]
+r = os.exec(cmd)
+print(r["code"], r["out"].trim, r["ok"])                     # expect: 0 hi true
+print(os.exec(["no-such-program-xyz"]) ! e -> e.kind)        # expect: NotFound
+
+# ffi: the C runtime
+libc = match os.platform
+    "windows" -> "msvcrt.dll"
+    "macos" -> "libSystem.dylib"
+    _ -> "libc.so.6"
+lib = ffi.load(libc)
+strlen = ffi.func(lib, "strlen", "u64(str)")
+cabs = ffi.func(lib, "abs", "int(int)")
+print(strlen("hello"), cabs(-42))                            # expect: 5 42
+
+# a small HTTP server, asked by a par task
+server = net.listen(18765)
+par fn ask(url) = net.read(url)
+answer = ask("http://127.0.0.1:18765/hello?x=1")
+req <: server
+print(req.method, req.path, req.query)                       # expect: GET /hello x=1
+req.respond(200, f"hi from {req.path}")
+print(answer.await)                                          # expect: hi from /hello
+posted = par net.request("POST", "http://127.0.0.1:18765/data", {"n": 1})
+req2 <: server
+print(req2.method, req2.json["n"], req2.headers["content-type"])  # expect: POST 1 application/json
+req2.respond(201, {"ok": true})
+res = posted.await
+print(res["status"], res["body"])                            # expect: 201 {"ok":true}
+server.close

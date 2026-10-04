@@ -1,0 +1,14 @@
+a = flow(5)
+b = flow(5)
+for i in 0..3
+    i :> a
+    i * 10 :> b
+a.close
+b.close
+for x <: a, y <: b -> print(x + y)
+# expect: 0
+# expect: 11
+# expect: 22
+c = flow(1)
+fork fn = 7 :> c
+print(c.recv)                         # expect: 7

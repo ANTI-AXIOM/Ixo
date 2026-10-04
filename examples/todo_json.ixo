@@ -1,0 +1,24 @@
+# A tiny to-do list stored as JSON.
+
+FILE = "todo_example.json"
+
+class Todo(title: str, done: bool = false)
+
+fn load: list
+    text = fs.read(FILE) ! _ -> "[]"
+    data = json.parse(text) ! _ -> []
+    data.map(Todo(_["title"], _["done"]))
+
+fn save(todos: list)
+    fs.write(FILE, json.str(todos, 2))
+
+todos = load()
+todos.add(Todo("learn Ixo"))
+todos.add(Todo("write a game", true))
+save(todos)
+
+for t in load()
+    mark = if t.done -> "x" else " "
+    print(f"[{mark}] {t.title}")
+
+fs.drop(FILE)

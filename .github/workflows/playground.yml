@@ -1,0 +1,50 @@
+name: Playground
+
+# Builds Ixo for WebAssembly, runs the test suite on it (in Node.js) and checks
+# the browser playground in headless Chrome. Running this workflow by hand
+# (Actions > Playground > Run workflow, with "deploy" ticked) also publishes the
+# playground to GitHub Pages; pushes never do.
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "playground/**", "examples/**", ".github/workflows/playground.yml"]
+  pull_request:
+    paths: ["src/**", "playground/**"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Publish to GitHub Pages"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+      - name: Build (Node.js)
+        run: bash playground/build.sh node
+      - name: Tests on WebAssembly
+        run: python3 tests/run.py --ixo build/wasm/ixo --platform wasm
+      - name: Build (browser)
+        run: bash playground/build.sh web
+      - name: Check the page in Chrome
+        run: node tests/tools/playground_check.mjs "$(command -v google-chrome)"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: playground/dist
+
+  deploy:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

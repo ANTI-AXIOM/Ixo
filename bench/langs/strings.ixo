@@ -1,0 +1,14 @@
+# string building, join, upper case, split, search
+fn run(n)
+    words = []
+    for i in 0..n
+        words.add(f"word{i % 997}x")
+    text = words.join(" ")
+    parts = text.up.cut(" ")
+    hits = parts.count(_.has("7"))
+    total = 0
+    for p in parts -> total += p.len
+    built = ""
+    for i in 0..n // 10 -> built += parts[i].slice(0, 2)
+    print(parts.len, hits, total, built.len)
+run(300_000)

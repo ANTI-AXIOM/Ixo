@@ -1,0 +1,1 @@
+print(5.upx)   # expect error: int has no method 'upx'

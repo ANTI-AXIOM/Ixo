@@ -1,0 +1,28 @@
+# Machine code that stops deep inside calls continues in the interpreter
+# exactly where it was: nothing before the stop runs twice.
+calls = 0
+$jit
+fn walk(xs, n)
+    calls += 1
+    if n == 0 -> return xs[0]       # indexing a list leaves machine code
+    walk(xs, n - 1) + 1
+print(walk([10], 5), calls)          # expect: 15 6
+
+hits = 0
+fn touch(xs)
+    hits += 1
+    xs[0]
+$jit
+fn run(n)
+    s = 0
+    for i in 0..n -> s += touch([i])
+    s
+print(run(1000), hits)               # expect: 499500 1000
+
+fn add(a, b) = a + b
+$jit
+fn twice(n, start)
+    t = start
+    for i in 0..n -> t = add(t, add(i, i))
+    t
+print(twice(100, 0), twice(3, 0.5))  # expect: 9900 6.5

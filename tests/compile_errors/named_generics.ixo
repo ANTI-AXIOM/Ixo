@@ -1,0 +1,2 @@
+fn first[Item](xs: list[Item]): Item = xs[0]
+bad: str = first([1, 2])    # expect error: can't assign a int to 'bad'

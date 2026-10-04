@@ -1,0 +1,91 @@
+class Point(x, y)
+
+fn describe(v)
+    match v
+        0 -> "zero"
+        1 | 2 | 3 -> "small"
+        4..=9 -> "medium"
+        int as n if n < 0 -> f"negative {n}"
+        int -> "big int"
+        str as s -> f"string of {s.len}"
+        (x, 0) -> f"on x-axis at {x}"
+        (x, y) -> f"point {x},{y}"
+        [] -> "empty list"
+        [only] -> f"one item: {only}"
+        [first, ..rest] -> f"first {first}, {rest.len} more"
+        Point(x, y) -> f"Point {x} {y}"
+        nil -> "nothing"
+        _ -> "something else"
+
+print(describe(0))                    # expect: zero
+print(describe(2))                    # expect: small
+print(describe(7))                    # expect: medium
+print(describe(-5))                   # expect: negative -5
+print(describe(100))                  # expect: big int
+print(describe("hey"))                # expect: string of 3
+print(describe((5, 0)))               # expect: on x-axis at 5
+print(describe((1, 2)))               # expect: point 1,2
+print(describe([]))                   # expect: empty list
+print(describe([9]))                  # expect: one item: 9
+print(describe([1, 2, 3]))            # expect: first 1, 2 more
+print(describe(Point(1, 2)))          # expect: Point 1 2
+print(describe(nil))                  # expect: nothing
+print(describe(2.5))                  # expect: something else
+
+status = 404
+msg = match status
+    200..=299 -> "ok"
+    400 | 401 | 403 -> "client error"
+    404 -> "not found"
+    code if code >= 500 -> "server error"
+    _ -> "unknown"
+print(msg)                            # expect: not found
+
+fn classify(x)
+    match x
+        0
+            return "zero!"
+        _
+            y = x * 2
+            f"double is {y}"
+print(classify(0), classify(4))       # expect: zero! double is 8
+
+r = match error("boom", "Oops")
+    Error.Oops -> "got oops"
+    _ -> "other"
+print(r)                              # expect: got oops
+
+e = error("x")
+kind = match e
+    Error -> "an error"
+    _ -> "fine"
+print(kind)                           # expect: an error
+
+fn head_tail(l)
+    match l
+        [h, ..t] -> f"{h} then {t}"
+        _ -> "empty"
+print(head_tail([1, 2, 3]), head_tail([]))  # expect: 1 then [2, 3] empty
+
+fn ends(l)
+    match l
+        [a, .., z] -> f"{a}..{z}"
+        _ -> "short"
+print(ends([1, 2, 3, 4]), ends([1]))  # expect: 1..4 short
+
+nested = ((1, 2), [3, 4])
+match nested
+    ((a, b), [c, d]) -> print(a + b + c + d)  # expect: 10
+    _ -> print("no")
+
+grade = match 85
+    90..=100 -> "A"
+    80..90 -> "B"
+    _ -> "C"
+print(grade)                          # expect: B
+
+word = match "banana"
+    "apple" | "cherry" -> "red"
+    "banana" -> "yellow"
+    _ -> "?"
+print(word)                           # expect: yellow

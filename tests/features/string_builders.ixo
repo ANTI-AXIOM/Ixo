@@ -1,0 +1,98 @@
+# s += x in a loop grows the string in place when only that loop sees it;
+# every other holder of the string must keep the value it had
+
+# a copy taken before the loop keeps the old text
+s = "ab"
+t = s
+for i in 0..3 -> s += "x"
+print(s, t)                          # expect: abxxx ab
+
+# strings kept between loop runs stay as they were
+saved = []
+word = ""
+for round in 0..3
+    for i in 0..2 -> word += f"{round}"
+    saved.add(word)
+print(saved)                         # expect: ["00", "0011", "001122"]
+
+# a loop variable that grows doesn't change the list it came from
+words = ["a", "b"]
+out = []
+for w in words
+    w += "!"
+    out.add(w)
+print(words, out)                    # expect: ["a", "b"] ["a!", "b!"]
+
+# s = s + x works the same
+acc = "-"
+for i in 0..4 -> acc = acc + str(i)
+print(acc)                           # expect: -0123
+
+# read in the loop: not grown in place, still right
+r = ""
+n = 0
+while r.len < 5
+    r += "y"
+    n += 1
+print(r, n)                          # expect: yyyyy 5
+
+# numbers and objects with += in the same position
+total = 0
+for i in 0..5 -> total += i
+print(total)                         # expect: 10
+
+class Bag(items)
+    fn +=(x)
+        items.add(x)
+bag = Bag([])
+for i in 0..3 -> bag += i
+print(bag.items)                     # expect: [0, 1, 2]
+
+# a grown string works as a map key afterwards (its hash is recomputed)
+key = ""
+for c in ["k", "e", "y"] -> key += c
+m = {"key": 1}
+print(m[key], key == "key")          # expect: 1 true
+
+# f-strings evaluate their parts in order
+log = []
+fn note(x)
+    log.add(x)
+    x
+print(f"{note(1)}-{note(2)}:{note(3) * 2:.1f}")   # expect: 1-2:6.0
+print(log)                           # expect: [1, 2, 3]
+
+# a long build, compiled to machine code
+fn build(k)
+    s = ""
+    for i in 0..k -> s += "ab"
+    s.len
+print(build(100_000))                # expect: 200000
+
+# module variables grow in place until something reads them
+g = ""
+for i in 0..5 -> g += "ab"
+copy = g
+g += "!"
+print(g, copy)                       # expect: ababababab! ababababab
+
+fn grow_local
+    s = ""
+    for i in 0..3 -> s += "x"
+    s
+h = grow_local()
+keep = h
+h += "y"
+print(h, keep)                       # expect: xxxy xxx
+
+seen = []
+glog = ""
+fn peek
+    seen.add(glog)
+for i in 0..3
+    glog += "z"
+    peek()
+print(seen, glog)                    # expect: ["z", "zz", "zzz"] zzz
+total_g = 0
+for i in 0..10 -> total_g += i
+print(total_g)                       # expect: 45

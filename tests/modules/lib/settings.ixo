@@ -1,0 +1,5 @@
+# A module that exports variables and constants.
+limit* = 10
+names*: list[str] = ["a", "b"]
+hidden = 3
+fn next_limit* = limit + 1

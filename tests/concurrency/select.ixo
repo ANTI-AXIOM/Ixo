@@ -1,0 +1,48 @@
+fast = flow()
+slow = flow()
+fork fn producer(out, label, delay, n)
+    for i in 0..n
+        delay.wait
+        f"{label}{i}" :> out
+
+producer(fast, "f", 5, 3)
+producer(slow, "s", 40, 2)
+got = []
+while got.len < 5
+    select
+        x <: fast -> got.add(x)
+        y <: slow -> got.add(y)
+print(got.sort)                             # expect: ["f0", "f1", "f2", "s0", "s1"]
+
+quiet = flow()
+select
+    v <: quiet -> print("unexpected", v)
+    after 30 -> print("timed out")          # expect: timed out
+
+ready = flow(1)
+7 :> ready
+select
+    v <: ready -> print("got", v)           # expect: got 7
+    else -> print("nothing")
+select
+    v <: ready -> print("got", v)
+    else -> print("nothing ready")          # expect: nothing ready
+
+done = flow()
+done.close
+select
+    v <: done -> print("closed gives", v)   # expect: closed gives nil
+    after 1000 -> print("no")
+
+# par workers feeding a select
+par fn square_later(x, out)
+    (x * x) :> out
+results = flow(10)
+square_later(3, results)
+square_later(4, results)
+total = 0
+for _ in 0..2
+    select
+        r <: results -> total += r
+        after 5000 -> print("too slow")
+print(total)                                # expect: 25

@@ -1,0 +1,30 @@
+enum Color
+    Red
+    Green
+    Blue
+
+print(Color.Red)                      # expect: Color.Red
+print(Color.Red == Color.Red, Color.Red == Color.Blue)  # expect: true false
+
+enum Shape
+    Circle(r)
+    Rect(w, h)
+    Empty
+    fn area = match self
+        Shape.Circle(r) -> 3 * r * r
+        Shape.Rect(w, h) -> w * h
+        _ -> 0
+
+shapes = [Shape.Circle(2), Shape.Rect(2, 5), Shape.Empty]
+print(shapes.map(_.area))             # expect: [12, 10, 0]
+print(Shape.Rect(1, 2))               # expect: Shape.Rect(w: 1, h: 2)
+
+fn name(c: Color) = match c
+    Color.Red -> "red"
+    Color.Green -> "green"
+    Color.Blue -> "blue"
+print(name(Color.Green))              # expect: green
+print(Color.Red is Color, Shape.Empty is Color)  # expect: true false
+
+match Shape.Rect(3, 3)
+    Shape -> print("a shape")         # expect: a shape

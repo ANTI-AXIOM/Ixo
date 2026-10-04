@@ -1,0 +1,57 @@
+# Blocks inside call arguments and brackets.
+items = [1, 2, 3]
+
+doubled = items.map(fn(x)
+    y = x * 2
+    y + 1
+)
+print(doubled)                            # expect: [3, 5, 7]
+
+labels = items.map(fn(n)
+    match n
+        1 -> "one"
+        2 -> "two"
+        _ -> "many")
+print(labels)                             # expect: ["one", "two", "many"]
+
+print(match items.len
+    3 -> "three items"
+    _ -> "other"
+)                                         # expect: three items
+
+sign = fn(x) = if x < 0 -> "-" else "+"
+kinds = items.map(fn(x)
+    if x % 2 == 0
+        "even"
+    else
+        "odd"
+)
+print(kinds, sign(-1))                    # expect: ["odd", "even", "odd"] -
+
+total = items.fold(0, fn(acc, x)
+    acc + x
+)
+print(total)                              # expect: 6
+
+pairs = [
+    items.map(fn(x)
+        x * 10
+    ),
+    [9],
+]
+print(pairs)                              # expect: [[10, 20, 30], [9]]
+
+nested = items.map(fn(x)
+    items.keep(fn(y)
+        y > x
+    ).len
+)
+print(nested)                             # expect: [2, 1, 0]
+
+# the old forms keep working
+args = [1,
+    2,
+    3]
+print(args.len, (items
+        .map(_ * 2)
+        .sum))                            # expect: 3 12

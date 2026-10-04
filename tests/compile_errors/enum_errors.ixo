@@ -1,0 +1,9 @@
+enum Dir
+    North
+    South
+
+d = Dir.Up               # expect error: Dir has no variant 'Up'
+
+class Plain(x)
+fn f(p: Plain) = p.x
+f(Dir.North)             # expect error: argument 1 of f() should be Plain, got Dir.North

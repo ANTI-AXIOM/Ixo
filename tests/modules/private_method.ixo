@@ -1,0 +1,3 @@
+use lib.geometry
+r = Rect(1, 1)
+r.hidden   # expect error: method 'hidden' of Rect is private

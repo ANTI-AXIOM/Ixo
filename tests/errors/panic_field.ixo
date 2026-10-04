@@ -1,0 +1,3 @@
+class A
+objs = [A(), 1]
+objs[0].foo   # expect panic: A has no field or method 'foo'

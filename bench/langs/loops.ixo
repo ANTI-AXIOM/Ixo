@@ -1,0 +1,7 @@
+# integer arithmetic in a loop
+fn run(n)
+    total = 0
+    for i in 0..n
+        total += (i * i + 3 * i) % 7
+    total
+print(run(10_000_000))

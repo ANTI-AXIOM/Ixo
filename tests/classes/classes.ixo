@@ -1,0 +1,81 @@
+class Point(x, y)
+    fn len = (self.x ** 2 + self.y ** 2).sqrt
+    fn add(other) = Point(self.x + other.x, self.y + other.y)
+    fn str = f"({self.x}, {self.y})"
+
+p = Point(3, 4)
+print(p.x, p.y, p.len)                # expect: 3 4 5.0
+q = p.add(Point(1, 1))
+print(q)                              # expect: (4, 5)
+print(q.str)                          # expect: (4, 5)
+p.x = 10
+print(p.x)                            # expect: 10
+
+class Counter
+    count = 0
+    step: int = 1
+    fn tick
+        self.count += self.step
+        self
+    fn reset
+        self.count = 0
+
+c = Counter()
+c.tick.tick.tick
+print(c.count)                        # expect: 3
+c.reset
+print(c.count)                        # expect: 0
+
+class Player
+    fn init(name, hp = 100)
+        self.name = name
+        self.hp = hp
+        self.items = []
+    fn hit(dmg)
+        self.hp -= dmg
+        if self.hp < 0 -> self.hp = 0
+    fn alive = self.hp > 0
+
+pl = Player("Ann")
+pl.hit(30)
+print(pl.name, pl.hp, pl.alive)       # expect: Ann 70 true
+pl.items.add("sword")
+print(pl.items)                       # expect: ["sword"]
+pl2 = Player("Bob", 10)
+pl2.hit(50)
+print(pl2.hp, pl2.alive)              # expect: 0 false
+print(Player("Z", 5))                 # expect: Player(name: "Z", hp: 5, items: [])
+print(type(pl))                       # expect: Player
+print(pl is pl, pl is pl2, pl == pl)  # expect: true false true
+
+h = pl.hit
+h(20)
+print(pl.hp)                          # expect: 50
+
+class Button
+    on_click = nil
+b = Button()
+b.on_click = fn = "clicked"
+print(b.on_click())                   # expect: clicked
+
+class Stack
+    items = []
+    fn push(x)
+        self.items.add(x)
+        self
+    fn pop = self.items.take
+    fn size = self.items.len
+s1 = Stack()
+s2 = Stack()
+s1.push(1).push(2)
+print(s1.size, s2.size, s1.pop)       # expect: 2 0 2
+
+fn make_class
+    class Local(v)
+        fn get = self.v
+    Local(7)
+print(make_class().get)               # expect: 7
+
+class Temp(celsius: float)
+    fn fahrenheit = self.celsius * 9 / 5 + 32
+print(Temp(100).fahrenheit)           # expect: 212.0

@@ -1,0 +1,40 @@
+interface Shape
+    fn area
+
+class Circle(r) is Shape
+    fn area = 3 * self.r * self.r
+
+class Square(side) is Shape
+    fn area = self.side * self.side
+
+fn describe(s: Shape): str
+    if s is Circle -> return f"circle of radius {s.r}"   # s.r: only a Circle has it
+    if s is Square
+        return f"square of side {s.side}"
+    "some shape"
+
+print(describe(Circle(2)), describe(Square(3)))       # expect: circle of radius 2 square of side 3
+
+fn name_len(name: str?): int
+    if name == nil -> return 0
+    name.len                                          # narrowed: str
+
+fn first_char(name: str?): str
+    if name != nil and name.len > 0 -> return name[0]
+    "?"
+
+fn loud(name: str?) = if name -> name.up else "NOBODY"
+
+print(name_len("ann"), name_len(nil), first_char("bo"), first_char(nil), loud("x"), loud(nil))
+# expect: 3 0 b ? X NOBODY
+
+fn size(s: Shape) = match s
+    Circle(r) -> s.r * 2                               # narrowed in the arm
+    Square(side) -> s.side
+    _ -> 0
+print(size(Circle(5)), size(Square(4)))               # expect: 10 4
+
+fn total(xs: list[int]?): int
+    if not xs -> return 0
+    xs.sum
+print(total([1, 2]), total(nil))                      # expect: 3 0

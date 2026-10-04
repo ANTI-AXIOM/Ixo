@@ -1,0 +1,12 @@
+class Particle(x, y, vx, vy)
+    fn step(dt)
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+    fn energy = 0.5 * (self.vx * self.vx + self.vy * self.vy)
+
+ps = (0..1000).map(Particle(_, _ * 2, 1.5, -0.5))
+for frame in 0..300
+    for p in ps -> p.step(0.016)
+total = 0.0
+for p in ps -> total += p.energy
+print(total.round(3), ps[10].x.round(3))

@@ -1,0 +1,46 @@
+# Results must be the same with and without the JIT (tests/tools/jit_check.py runs both).
+$jit
+fn mods(n)
+    s = 0
+    for a in -n..=n
+        for b in -5..=5
+            if b != 0
+                s += (a % b) * 7 + (a // b) * 3
+    s
+print(mods(40))                                   # expect: -654
+
+fn wrap(n)
+    x = 9223372036854775807
+    for i in 0..n
+        x += 1
+    x
+print(wrap(3))                                    # expect: -9223372036854775806
+
+fn fib(n) = if n < 2 -> n else fib(n - 1) + fib(n - 2)
+print(fib(25), fib(2.0))                          # expect: 75025 1.0
+
+fn deep(n) = if n == 0 -> 0 else deep(n - 1) + 1
+print(deep(20000))                                # expect: 20000
+
+$jit
+fn steps(n)
+    total = 0
+    for i in 10..0 by -3
+        total += i
+    for j in 0..=n by 5
+        total += j
+    total
+print(steps(20))                                  # expect: 72
+
+fn count(limit: int): int
+    running = true
+    n = 0
+    while running
+        n += 1
+        if n >= limit -> running = false
+    n
+print(count(100000), count(3))                    # expect: 100000 3
+
+fn divide(a, b) = a % b
+for i in 0..300 -> divide(i + 1, 7)
+print(divide(10, 0))                              # expect panic: modulo by zero

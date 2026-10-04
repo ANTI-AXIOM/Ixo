@@ -1,0 +1,18 @@
+table = freeze((0..50000).map(_ * 2))
+names = freeze({"a": [1, 2], "b": [3]})
+print(frozen(table), frozen([1]), table.len, names["a"])   # expect: true false 50000 [1, 2]
+
+par fn lookup(t, i) = t[i] + t.len
+tasks = (0..4).map(par lookup(table, _ * 1000))
+print(tasks.map(_.await))                               # expect: [50000, 52000, 54000, 56000]
+
+par fn keys(m) = m.keys.sort
+print((par keys(names)).await)                           # expect: ["a", "b"]
+
+copy = table.map(_ + 1)                                  # reading makes normal values
+copy.add(0)
+print(frozen(copy), copy.len)                            # expect: false 50001
+
+gc()
+print(table[10], names["b"])                             # expect: 20 [3]
+table.add(1)                                             # expect panic: can't change a frozen list (.add)

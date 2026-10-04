@@ -1,0 +1,1503 @@
+fn f0(x)
+    s = 0
+    for i in 0..3 -> s += (x * 0 + i) % 7
+    s
+fn f1(x)
+    s = 0
+    for i in 0..3 -> s += (x * 1 + i) % 7
+    s
+fn f2(x)
+    s = 0
+    for i in 0..3 -> s += (x * 2 + i) % 7
+    s
+fn f3(x)
+    s = 0
+    for i in 0..3 -> s += (x * 3 + i) % 7
+    s
+fn f4(x)
+    s = 0
+    for i in 0..3 -> s += (x * 4 + i) % 7
+    s
+fn f5(x)
+    s = 0
+    for i in 0..3 -> s += (x * 5 + i) % 7
+    s
+fn f6(x)
+    s = 0
+    for i in 0..3 -> s += (x * 6 + i) % 7
+    s
+fn f7(x)
+    s = 0
+    for i in 0..3 -> s += (x * 7 + i) % 7
+    s
+fn f8(x)
+    s = 0
+    for i in 0..3 -> s += (x * 8 + i) % 7
+    s
+fn f9(x)
+    s = 0
+    for i in 0..3 -> s += (x * 9 + i) % 7
+    s
+fn f10(x)
+    s = 0
+    for i in 0..3 -> s += (x * 10 + i) % 7
+    s
+fn f11(x)
+    s = 0
+    for i in 0..3 -> s += (x * 11 + i) % 7
+    s
+fn f12(x)
+    s = 0
+    for i in 0..3 -> s += (x * 12 + i) % 7
+    s
+fn f13(x)
+    s = 0
+    for i in 0..3 -> s += (x * 13 + i) % 7
+    s
+fn f14(x)
+    s = 0
+    for i in 0..3 -> s += (x * 14 + i) % 7
+    s
+fn f15(x)
+    s = 0
+    for i in 0..3 -> s += (x * 15 + i) % 7
+    s
+fn f16(x)
+    s = 0
+    for i in 0..3 -> s += (x * 16 + i) % 7
+    s
+fn f17(x)
+    s = 0
+    for i in 0..3 -> s += (x * 17 + i) % 7
+    s
+fn f18(x)
+    s = 0
+    for i in 0..3 -> s += (x * 18 + i) % 7
+    s
+fn f19(x)
+    s = 0
+    for i in 0..3 -> s += (x * 19 + i) % 7
+    s
+fn f20(x)
+    s = 0
+    for i in 0..3 -> s += (x * 20 + i) % 7
+    s
+fn f21(x)
+    s = 0
+    for i in 0..3 -> s += (x * 21 + i) % 7
+    s
+fn f22(x)
+    s = 0
+    for i in 0..3 -> s += (x * 22 + i) % 7
+    s
+fn f23(x)
+    s = 0
+    for i in 0..3 -> s += (x * 23 + i) % 7
+    s
+fn f24(x)
+    s = 0
+    for i in 0..3 -> s += (x * 24 + i) % 7
+    s
+fn f25(x)
+    s = 0
+    for i in 0..3 -> s += (x * 25 + i) % 7
+    s
+fn f26(x)
+    s = 0
+    for i in 0..3 -> s += (x * 26 + i) % 7
+    s
+fn f27(x)
+    s = 0
+    for i in 0..3 -> s += (x * 27 + i) % 7
+    s
+fn f28(x)
+    s = 0
+    for i in 0..3 -> s += (x * 28 + i) % 7
+    s
+fn f29(x)
+    s = 0
+    for i in 0..3 -> s += (x * 29 + i) % 7
+    s
+fn f30(x)
+    s = 0
+    for i in 0..3 -> s += (x * 30 + i) % 7
+    s
+fn f31(x)
+    s = 0
+    for i in 0..3 -> s += (x * 31 + i) % 7
+    s
+fn f32(x)
+    s = 0
+    for i in 0..3 -> s += (x * 32 + i) % 7
+    s
+fn f33(x)
+    s = 0
+    for i in 0..3 -> s += (x * 33 + i) % 7
+    s
+fn f34(x)
+    s = 0
+    for i in 0..3 -> s += (x * 34 + i) % 7
+    s
+fn f35(x)
+    s = 0
+    for i in 0..3 -> s += (x * 35 + i) % 7
+    s
+fn f36(x)
+    s = 0
+    for i in 0..3 -> s += (x * 36 + i) % 7
+    s
+fn f37(x)
+    s = 0
+    for i in 0..3 -> s += (x * 37 + i) % 7
+    s
+fn f38(x)
+    s = 0
+    for i in 0..3 -> s += (x * 38 + i) % 7
+    s
+fn f39(x)
+    s = 0
+    for i in 0..3 -> s += (x * 39 + i) % 7
+    s
+fn f40(x)
+    s = 0
+    for i in 0..3 -> s += (x * 40 + i) % 7
+    s
+fn f41(x)
+    s = 0
+    for i in 0..3 -> s += (x * 41 + i) % 7
+    s
+fn f42(x)
+    s = 0
+    for i in 0..3 -> s += (x * 42 + i) % 7
+    s
+fn f43(x)
+    s = 0
+    for i in 0..3 -> s += (x * 43 + i) % 7
+    s
+fn f44(x)
+    s = 0
+    for i in 0..3 -> s += (x * 44 + i) % 7
+    s
+fn f45(x)
+    s = 0
+    for i in 0..3 -> s += (x * 45 + i) % 7
+    s
+fn f46(x)
+    s = 0
+    for i in 0..3 -> s += (x * 46 + i) % 7
+    s
+fn f47(x)
+    s = 0
+    for i in 0..3 -> s += (x * 47 + i) % 7
+    s
+fn f48(x)
+    s = 0
+    for i in 0..3 -> s += (x * 48 + i) % 7
+    s
+fn f49(x)
+    s = 0
+    for i in 0..3 -> s += (x * 49 + i) % 7
+    s
+fn f50(x)
+    s = 0
+    for i in 0..3 -> s += (x * 50 + i) % 7
+    s
+fn f51(x)
+    s = 0
+    for i in 0..3 -> s += (x * 51 + i) % 7
+    s
+fn f52(x)
+    s = 0
+    for i in 0..3 -> s += (x * 52 + i) % 7
+    s
+fn f53(x)
+    s = 0
+    for i in 0..3 -> s += (x * 53 + i) % 7
+    s
+fn f54(x)
+    s = 0
+    for i in 0..3 -> s += (x * 54 + i) % 7
+    s
+fn f55(x)
+    s = 0
+    for i in 0..3 -> s += (x * 55 + i) % 7
+    s
+fn f56(x)
+    s = 0
+    for i in 0..3 -> s += (x * 56 + i) % 7
+    s
+fn f57(x)
+    s = 0
+    for i in 0..3 -> s += (x * 57 + i) % 7
+    s
+fn f58(x)
+    s = 0
+    for i in 0..3 -> s += (x * 58 + i) % 7
+    s
+fn f59(x)
+    s = 0
+    for i in 0..3 -> s += (x * 59 + i) % 7
+    s
+fn f60(x)
+    s = 0
+    for i in 0..3 -> s += (x * 60 + i) % 7
+    s
+fn f61(x)
+    s = 0
+    for i in 0..3 -> s += (x * 61 + i) % 7
+    s
+fn f62(x)
+    s = 0
+    for i in 0..3 -> s += (x * 62 + i) % 7
+    s
+fn f63(x)
+    s = 0
+    for i in 0..3 -> s += (x * 63 + i) % 7
+    s
+fn f64(x)
+    s = 0
+    for i in 0..3 -> s += (x * 64 + i) % 7
+    s
+fn f65(x)
+    s = 0
+    for i in 0..3 -> s += (x * 65 + i) % 7
+    s
+fn f66(x)
+    s = 0
+    for i in 0..3 -> s += (x * 66 + i) % 7
+    s
+fn f67(x)
+    s = 0
+    for i in 0..3 -> s += (x * 67 + i) % 7
+    s
+fn f68(x)
+    s = 0
+    for i in 0..3 -> s += (x * 68 + i) % 7
+    s
+fn f69(x)
+    s = 0
+    for i in 0..3 -> s += (x * 69 + i) % 7
+    s
+fn f70(x)
+    s = 0
+    for i in 0..3 -> s += (x * 70 + i) % 7
+    s
+fn f71(x)
+    s = 0
+    for i in 0..3 -> s += (x * 71 + i) % 7
+    s
+fn f72(x)
+    s = 0
+    for i in 0..3 -> s += (x * 72 + i) % 7
+    s
+fn f73(x)
+    s = 0
+    for i in 0..3 -> s += (x * 73 + i) % 7
+    s
+fn f74(x)
+    s = 0
+    for i in 0..3 -> s += (x * 74 + i) % 7
+    s
+fn f75(x)
+    s = 0
+    for i in 0..3 -> s += (x * 75 + i) % 7
+    s
+fn f76(x)
+    s = 0
+    for i in 0..3 -> s += (x * 76 + i) % 7
+    s
+fn f77(x)
+    s = 0
+    for i in 0..3 -> s += (x * 77 + i) % 7
+    s
+fn f78(x)
+    s = 0
+    for i in 0..3 -> s += (x * 78 + i) % 7
+    s
+fn f79(x)
+    s = 0
+    for i in 0..3 -> s += (x * 79 + i) % 7
+    s
+fn f80(x)
+    s = 0
+    for i in 0..3 -> s += (x * 80 + i) % 7
+    s
+fn f81(x)
+    s = 0
+    for i in 0..3 -> s += (x * 81 + i) % 7
+    s
+fn f82(x)
+    s = 0
+    for i in 0..3 -> s += (x * 82 + i) % 7
+    s
+fn f83(x)
+    s = 0
+    for i in 0..3 -> s += (x * 83 + i) % 7
+    s
+fn f84(x)
+    s = 0
+    for i in 0..3 -> s += (x * 84 + i) % 7
+    s
+fn f85(x)
+    s = 0
+    for i in 0..3 -> s += (x * 85 + i) % 7
+    s
+fn f86(x)
+    s = 0
+    for i in 0..3 -> s += (x * 86 + i) % 7
+    s
+fn f87(x)
+    s = 0
+    for i in 0..3 -> s += (x * 87 + i) % 7
+    s
+fn f88(x)
+    s = 0
+    for i in 0..3 -> s += (x * 88 + i) % 7
+    s
+fn f89(x)
+    s = 0
+    for i in 0..3 -> s += (x * 89 + i) % 7
+    s
+fn f90(x)
+    s = 0
+    for i in 0..3 -> s += (x * 90 + i) % 7
+    s
+fn f91(x)
+    s = 0
+    for i in 0..3 -> s += (x * 91 + i) % 7
+    s
+fn f92(x)
+    s = 0
+    for i in 0..3 -> s += (x * 92 + i) % 7
+    s
+fn f93(x)
+    s = 0
+    for i in 0..3 -> s += (x * 93 + i) % 7
+    s
+fn f94(x)
+    s = 0
+    for i in 0..3 -> s += (x * 94 + i) % 7
+    s
+fn f95(x)
+    s = 0
+    for i in 0..3 -> s += (x * 95 + i) % 7
+    s
+fn f96(x)
+    s = 0
+    for i in 0..3 -> s += (x * 96 + i) % 7
+    s
+fn f97(x)
+    s = 0
+    for i in 0..3 -> s += (x * 97 + i) % 7
+    s
+fn f98(x)
+    s = 0
+    for i in 0..3 -> s += (x * 98 + i) % 7
+    s
+fn f99(x)
+    s = 0
+    for i in 0..3 -> s += (x * 99 + i) % 7
+    s
+fn f100(x)
+    s = 0
+    for i in 0..3 -> s += (x * 100 + i) % 7
+    s
+fn f101(x)
+    s = 0
+    for i in 0..3 -> s += (x * 101 + i) % 7
+    s
+fn f102(x)
+    s = 0
+    for i in 0..3 -> s += (x * 102 + i) % 7
+    s
+fn f103(x)
+    s = 0
+    for i in 0..3 -> s += (x * 103 + i) % 7
+    s
+fn f104(x)
+    s = 0
+    for i in 0..3 -> s += (x * 104 + i) % 7
+    s
+fn f105(x)
+    s = 0
+    for i in 0..3 -> s += (x * 105 + i) % 7
+    s
+fn f106(x)
+    s = 0
+    for i in 0..3 -> s += (x * 106 + i) % 7
+    s
+fn f107(x)
+    s = 0
+    for i in 0..3 -> s += (x * 107 + i) % 7
+    s
+fn f108(x)
+    s = 0
+    for i in 0..3 -> s += (x * 108 + i) % 7
+    s
+fn f109(x)
+    s = 0
+    for i in 0..3 -> s += (x * 109 + i) % 7
+    s
+fn f110(x)
+    s = 0
+    for i in 0..3 -> s += (x * 110 + i) % 7
+    s
+fn f111(x)
+    s = 0
+    for i in 0..3 -> s += (x * 111 + i) % 7
+    s
+fn f112(x)
+    s = 0
+    for i in 0..3 -> s += (x * 112 + i) % 7
+    s
+fn f113(x)
+    s = 0
+    for i in 0..3 -> s += (x * 113 + i) % 7
+    s
+fn f114(x)
+    s = 0
+    for i in 0..3 -> s += (x * 114 + i) % 7
+    s
+fn f115(x)
+    s = 0
+    for i in 0..3 -> s += (x * 115 + i) % 7
+    s
+fn f116(x)
+    s = 0
+    for i in 0..3 -> s += (x * 116 + i) % 7
+    s
+fn f117(x)
+    s = 0
+    for i in 0..3 -> s += (x * 117 + i) % 7
+    s
+fn f118(x)
+    s = 0
+    for i in 0..3 -> s += (x * 118 + i) % 7
+    s
+fn f119(x)
+    s = 0
+    for i in 0..3 -> s += (x * 119 + i) % 7
+    s
+fn f120(x)
+    s = 0
+    for i in 0..3 -> s += (x * 120 + i) % 7
+    s
+fn f121(x)
+    s = 0
+    for i in 0..3 -> s += (x * 121 + i) % 7
+    s
+fn f122(x)
+    s = 0
+    for i in 0..3 -> s += (x * 122 + i) % 7
+    s
+fn f123(x)
+    s = 0
+    for i in 0..3 -> s += (x * 123 + i) % 7
+    s
+fn f124(x)
+    s = 0
+    for i in 0..3 -> s += (x * 124 + i) % 7
+    s
+fn f125(x)
+    s = 0
+    for i in 0..3 -> s += (x * 125 + i) % 7
+    s
+fn f126(x)
+    s = 0
+    for i in 0..3 -> s += (x * 126 + i) % 7
+    s
+fn f127(x)
+    s = 0
+    for i in 0..3 -> s += (x * 127 + i) % 7
+    s
+fn f128(x)
+    s = 0
+    for i in 0..3 -> s += (x * 128 + i) % 7
+    s
+fn f129(x)
+    s = 0
+    for i in 0..3 -> s += (x * 129 + i) % 7
+    s
+fn f130(x)
+    s = 0
+    for i in 0..3 -> s += (x * 130 + i) % 7
+    s
+fn f131(x)
+    s = 0
+    for i in 0..3 -> s += (x * 131 + i) % 7
+    s
+fn f132(x)
+    s = 0
+    for i in 0..3 -> s += (x * 132 + i) % 7
+    s
+fn f133(x)
+    s = 0
+    for i in 0..3 -> s += (x * 133 + i) % 7
+    s
+fn f134(x)
+    s = 0
+    for i in 0..3 -> s += (x * 134 + i) % 7
+    s
+fn f135(x)
+    s = 0
+    for i in 0..3 -> s += (x * 135 + i) % 7
+    s
+fn f136(x)
+    s = 0
+    for i in 0..3 -> s += (x * 136 + i) % 7
+    s
+fn f137(x)
+    s = 0
+    for i in 0..3 -> s += (x * 137 + i) % 7
+    s
+fn f138(x)
+    s = 0
+    for i in 0..3 -> s += (x * 138 + i) % 7
+    s
+fn f139(x)
+    s = 0
+    for i in 0..3 -> s += (x * 139 + i) % 7
+    s
+fn f140(x)
+    s = 0
+    for i in 0..3 -> s += (x * 140 + i) % 7
+    s
+fn f141(x)
+    s = 0
+    for i in 0..3 -> s += (x * 141 + i) % 7
+    s
+fn f142(x)
+    s = 0
+    for i in 0..3 -> s += (x * 142 + i) % 7
+    s
+fn f143(x)
+    s = 0
+    for i in 0..3 -> s += (x * 143 + i) % 7
+    s
+fn f144(x)
+    s = 0
+    for i in 0..3 -> s += (x * 144 + i) % 7
+    s
+fn f145(x)
+    s = 0
+    for i in 0..3 -> s += (x * 145 + i) % 7
+    s
+fn f146(x)
+    s = 0
+    for i in 0..3 -> s += (x * 146 + i) % 7
+    s
+fn f147(x)
+    s = 0
+    for i in 0..3 -> s += (x * 147 + i) % 7
+    s
+fn f148(x)
+    s = 0
+    for i in 0..3 -> s += (x * 148 + i) % 7
+    s
+fn f149(x)
+    s = 0
+    for i in 0..3 -> s += (x * 149 + i) % 7
+    s
+fn f150(x)
+    s = 0
+    for i in 0..3 -> s += (x * 150 + i) % 7
+    s
+fn f151(x)
+    s = 0
+    for i in 0..3 -> s += (x * 151 + i) % 7
+    s
+fn f152(x)
+    s = 0
+    for i in 0..3 -> s += (x * 152 + i) % 7
+    s
+fn f153(x)
+    s = 0
+    for i in 0..3 -> s += (x * 153 + i) % 7
+    s
+fn f154(x)
+    s = 0
+    for i in 0..3 -> s += (x * 154 + i) % 7
+    s
+fn f155(x)
+    s = 0
+    for i in 0..3 -> s += (x * 155 + i) % 7
+    s
+fn f156(x)
+    s = 0
+    for i in 0..3 -> s += (x * 156 + i) % 7
+    s
+fn f157(x)
+    s = 0
+    for i in 0..3 -> s += (x * 157 + i) % 7
+    s
+fn f158(x)
+    s = 0
+    for i in 0..3 -> s += (x * 158 + i) % 7
+    s
+fn f159(x)
+    s = 0
+    for i in 0..3 -> s += (x * 159 + i) % 7
+    s
+fn f160(x)
+    s = 0
+    for i in 0..3 -> s += (x * 160 + i) % 7
+    s
+fn f161(x)
+    s = 0
+    for i in 0..3 -> s += (x * 161 + i) % 7
+    s
+fn f162(x)
+    s = 0
+    for i in 0..3 -> s += (x * 162 + i) % 7
+    s
+fn f163(x)
+    s = 0
+    for i in 0..3 -> s += (x * 163 + i) % 7
+    s
+fn f164(x)
+    s = 0
+    for i in 0..3 -> s += (x * 164 + i) % 7
+    s
+fn f165(x)
+    s = 0
+    for i in 0..3 -> s += (x * 165 + i) % 7
+    s
+fn f166(x)
+    s = 0
+    for i in 0..3 -> s += (x * 166 + i) % 7
+    s
+fn f167(x)
+    s = 0
+    for i in 0..3 -> s += (x * 167 + i) % 7
+    s
+fn f168(x)
+    s = 0
+    for i in 0..3 -> s += (x * 168 + i) % 7
+    s
+fn f169(x)
+    s = 0
+    for i in 0..3 -> s += (x * 169 + i) % 7
+    s
+fn f170(x)
+    s = 0
+    for i in 0..3 -> s += (x * 170 + i) % 7
+    s
+fn f171(x)
+    s = 0
+    for i in 0..3 -> s += (x * 171 + i) % 7
+    s
+fn f172(x)
+    s = 0
+    for i in 0..3 -> s += (x * 172 + i) % 7
+    s
+fn f173(x)
+    s = 0
+    for i in 0..3 -> s += (x * 173 + i) % 7
+    s
+fn f174(x)
+    s = 0
+    for i in 0..3 -> s += (x * 174 + i) % 7
+    s
+fn f175(x)
+    s = 0
+    for i in 0..3 -> s += (x * 175 + i) % 7
+    s
+fn f176(x)
+    s = 0
+    for i in 0..3 -> s += (x * 176 + i) % 7
+    s
+fn f177(x)
+    s = 0
+    for i in 0..3 -> s += (x * 177 + i) % 7
+    s
+fn f178(x)
+    s = 0
+    for i in 0..3 -> s += (x * 178 + i) % 7
+    s
+fn f179(x)
+    s = 0
+    for i in 0..3 -> s += (x * 179 + i) % 7
+    s
+fn f180(x)
+    s = 0
+    for i in 0..3 -> s += (x * 180 + i) % 7
+    s
+fn f181(x)
+    s = 0
+    for i in 0..3 -> s += (x * 181 + i) % 7
+    s
+fn f182(x)
+    s = 0
+    for i in 0..3 -> s += (x * 182 + i) % 7
+    s
+fn f183(x)
+    s = 0
+    for i in 0..3 -> s += (x * 183 + i) % 7
+    s
+fn f184(x)
+    s = 0
+    for i in 0..3 -> s += (x * 184 + i) % 7
+    s
+fn f185(x)
+    s = 0
+    for i in 0..3 -> s += (x * 185 + i) % 7
+    s
+fn f186(x)
+    s = 0
+    for i in 0..3 -> s += (x * 186 + i) % 7
+    s
+fn f187(x)
+    s = 0
+    for i in 0..3 -> s += (x * 187 + i) % 7
+    s
+fn f188(x)
+    s = 0
+    for i in 0..3 -> s += (x * 188 + i) % 7
+    s
+fn f189(x)
+    s = 0
+    for i in 0..3 -> s += (x * 189 + i) % 7
+    s
+fn f190(x)
+    s = 0
+    for i in 0..3 -> s += (x * 190 + i) % 7
+    s
+fn f191(x)
+    s = 0
+    for i in 0..3 -> s += (x * 191 + i) % 7
+    s
+fn f192(x)
+    s = 0
+    for i in 0..3 -> s += (x * 192 + i) % 7
+    s
+fn f193(x)
+    s = 0
+    for i in 0..3 -> s += (x * 193 + i) % 7
+    s
+fn f194(x)
+    s = 0
+    for i in 0..3 -> s += (x * 194 + i) % 7
+    s
+fn f195(x)
+    s = 0
+    for i in 0..3 -> s += (x * 195 + i) % 7
+    s
+fn f196(x)
+    s = 0
+    for i in 0..3 -> s += (x * 196 + i) % 7
+    s
+fn f197(x)
+    s = 0
+    for i in 0..3 -> s += (x * 197 + i) % 7
+    s
+fn f198(x)
+    s = 0
+    for i in 0..3 -> s += (x * 198 + i) % 7
+    s
+fn f199(x)
+    s = 0
+    for i in 0..3 -> s += (x * 199 + i) % 7
+    s
+fn f200(x)
+    s = 0
+    for i in 0..3 -> s += (x * 200 + i) % 7
+    s
+fn f201(x)
+    s = 0
+    for i in 0..3 -> s += (x * 201 + i) % 7
+    s
+fn f202(x)
+    s = 0
+    for i in 0..3 -> s += (x * 202 + i) % 7
+    s
+fn f203(x)
+    s = 0
+    for i in 0..3 -> s += (x * 203 + i) % 7
+    s
+fn f204(x)
+    s = 0
+    for i in 0..3 -> s += (x * 204 + i) % 7
+    s
+fn f205(x)
+    s = 0
+    for i in 0..3 -> s += (x * 205 + i) % 7
+    s
+fn f206(x)
+    s = 0
+    for i in 0..3 -> s += (x * 206 + i) % 7
+    s
+fn f207(x)
+    s = 0
+    for i in 0..3 -> s += (x * 207 + i) % 7
+    s
+fn f208(x)
+    s = 0
+    for i in 0..3 -> s += (x * 208 + i) % 7
+    s
+fn f209(x)
+    s = 0
+    for i in 0..3 -> s += (x * 209 + i) % 7
+    s
+fn f210(x)
+    s = 0
+    for i in 0..3 -> s += (x * 210 + i) % 7
+    s
+fn f211(x)
+    s = 0
+    for i in 0..3 -> s += (x * 211 + i) % 7
+    s
+fn f212(x)
+    s = 0
+    for i in 0..3 -> s += (x * 212 + i) % 7
+    s
+fn f213(x)
+    s = 0
+    for i in 0..3 -> s += (x * 213 + i) % 7
+    s
+fn f214(x)
+    s = 0
+    for i in 0..3 -> s += (x * 214 + i) % 7
+    s
+fn f215(x)
+    s = 0
+    for i in 0..3 -> s += (x * 215 + i) % 7
+    s
+fn f216(x)
+    s = 0
+    for i in 0..3 -> s += (x * 216 + i) % 7
+    s
+fn f217(x)
+    s = 0
+    for i in 0..3 -> s += (x * 217 + i) % 7
+    s
+fn f218(x)
+    s = 0
+    for i in 0..3 -> s += (x * 218 + i) % 7
+    s
+fn f219(x)
+    s = 0
+    for i in 0..3 -> s += (x * 219 + i) % 7
+    s
+fn f220(x)
+    s = 0
+    for i in 0..3 -> s += (x * 220 + i) % 7
+    s
+fn f221(x)
+    s = 0
+    for i in 0..3 -> s += (x * 221 + i) % 7
+    s
+fn f222(x)
+    s = 0
+    for i in 0..3 -> s += (x * 222 + i) % 7
+    s
+fn f223(x)
+    s = 0
+    for i in 0..3 -> s += (x * 223 + i) % 7
+    s
+fn f224(x)
+    s = 0
+    for i in 0..3 -> s += (x * 224 + i) % 7
+    s
+fn f225(x)
+    s = 0
+    for i in 0..3 -> s += (x * 225 + i) % 7
+    s
+fn f226(x)
+    s = 0
+    for i in 0..3 -> s += (x * 226 + i) % 7
+    s
+fn f227(x)
+    s = 0
+    for i in 0..3 -> s += (x * 227 + i) % 7
+    s
+fn f228(x)
+    s = 0
+    for i in 0..3 -> s += (x * 228 + i) % 7
+    s
+fn f229(x)
+    s = 0
+    for i in 0..3 -> s += (x * 229 + i) % 7
+    s
+fn f230(x)
+    s = 0
+    for i in 0..3 -> s += (x * 230 + i) % 7
+    s
+fn f231(x)
+    s = 0
+    for i in 0..3 -> s += (x * 231 + i) % 7
+    s
+fn f232(x)
+    s = 0
+    for i in 0..3 -> s += (x * 232 + i) % 7
+    s
+fn f233(x)
+    s = 0
+    for i in 0..3 -> s += (x * 233 + i) % 7
+    s
+fn f234(x)
+    s = 0
+    for i in 0..3 -> s += (x * 234 + i) % 7
+    s
+fn f235(x)
+    s = 0
+    for i in 0..3 -> s += (x * 235 + i) % 7
+    s
+fn f236(x)
+    s = 0
+    for i in 0..3 -> s += (x * 236 + i) % 7
+    s
+fn f237(x)
+    s = 0
+    for i in 0..3 -> s += (x * 237 + i) % 7
+    s
+fn f238(x)
+    s = 0
+    for i in 0..3 -> s += (x * 238 + i) % 7
+    s
+fn f239(x)
+    s = 0
+    for i in 0..3 -> s += (x * 239 + i) % 7
+    s
+fn f240(x)
+    s = 0
+    for i in 0..3 -> s += (x * 240 + i) % 7
+    s
+fn f241(x)
+    s = 0
+    for i in 0..3 -> s += (x * 241 + i) % 7
+    s
+fn f242(x)
+    s = 0
+    for i in 0..3 -> s += (x * 242 + i) % 7
+    s
+fn f243(x)
+    s = 0
+    for i in 0..3 -> s += (x * 243 + i) % 7
+    s
+fn f244(x)
+    s = 0
+    for i in 0..3 -> s += (x * 244 + i) % 7
+    s
+fn f245(x)
+    s = 0
+    for i in 0..3 -> s += (x * 245 + i) % 7
+    s
+fn f246(x)
+    s = 0
+    for i in 0..3 -> s += (x * 246 + i) % 7
+    s
+fn f247(x)
+    s = 0
+    for i in 0..3 -> s += (x * 247 + i) % 7
+    s
+fn f248(x)
+    s = 0
+    for i in 0..3 -> s += (x * 248 + i) % 7
+    s
+fn f249(x)
+    s = 0
+    for i in 0..3 -> s += (x * 249 + i) % 7
+    s
+fn f250(x)
+    s = 0
+    for i in 0..3 -> s += (x * 250 + i) % 7
+    s
+fn f251(x)
+    s = 0
+    for i in 0..3 -> s += (x * 251 + i) % 7
+    s
+fn f252(x)
+    s = 0
+    for i in 0..3 -> s += (x * 252 + i) % 7
+    s
+fn f253(x)
+    s = 0
+    for i in 0..3 -> s += (x * 253 + i) % 7
+    s
+fn f254(x)
+    s = 0
+    for i in 0..3 -> s += (x * 254 + i) % 7
+    s
+fn f255(x)
+    s = 0
+    for i in 0..3 -> s += (x * 255 + i) % 7
+    s
+fn f256(x)
+    s = 0
+    for i in 0..3 -> s += (x * 256 + i) % 7
+    s
+fn f257(x)
+    s = 0
+    for i in 0..3 -> s += (x * 257 + i) % 7
+    s
+fn f258(x)
+    s = 0
+    for i in 0..3 -> s += (x * 258 + i) % 7
+    s
+fn f259(x)
+    s = 0
+    for i in 0..3 -> s += (x * 259 + i) % 7
+    s
+fn f260(x)
+    s = 0
+    for i in 0..3 -> s += (x * 260 + i) % 7
+    s
+fn f261(x)
+    s = 0
+    for i in 0..3 -> s += (x * 261 + i) % 7
+    s
+fn f262(x)
+    s = 0
+    for i in 0..3 -> s += (x * 262 + i) % 7
+    s
+fn f263(x)
+    s = 0
+    for i in 0..3 -> s += (x * 263 + i) % 7
+    s
+fn f264(x)
+    s = 0
+    for i in 0..3 -> s += (x * 264 + i) % 7
+    s
+fn f265(x)
+    s = 0
+    for i in 0..3 -> s += (x * 265 + i) % 7
+    s
+fn f266(x)
+    s = 0
+    for i in 0..3 -> s += (x * 266 + i) % 7
+    s
+fn f267(x)
+    s = 0
+    for i in 0..3 -> s += (x * 267 + i) % 7
+    s
+fn f268(x)
+    s = 0
+    for i in 0..3 -> s += (x * 268 + i) % 7
+    s
+fn f269(x)
+    s = 0
+    for i in 0..3 -> s += (x * 269 + i) % 7
+    s
+fn f270(x)
+    s = 0
+    for i in 0..3 -> s += (x * 270 + i) % 7
+    s
+fn f271(x)
+    s = 0
+    for i in 0..3 -> s += (x * 271 + i) % 7
+    s
+fn f272(x)
+    s = 0
+    for i in 0..3 -> s += (x * 272 + i) % 7
+    s
+fn f273(x)
+    s = 0
+    for i in 0..3 -> s += (x * 273 + i) % 7
+    s
+fn f274(x)
+    s = 0
+    for i in 0..3 -> s += (x * 274 + i) % 7
+    s
+fn f275(x)
+    s = 0
+    for i in 0..3 -> s += (x * 275 + i) % 7
+    s
+fn f276(x)
+    s = 0
+    for i in 0..3 -> s += (x * 276 + i) % 7
+    s
+fn f277(x)
+    s = 0
+    for i in 0..3 -> s += (x * 277 + i) % 7
+    s
+fn f278(x)
+    s = 0
+    for i in 0..3 -> s += (x * 278 + i) % 7
+    s
+fn f279(x)
+    s = 0
+    for i in 0..3 -> s += (x * 279 + i) % 7
+    s
+fn f280(x)
+    s = 0
+    for i in 0..3 -> s += (x * 280 + i) % 7
+    s
+fn f281(x)
+    s = 0
+    for i in 0..3 -> s += (x * 281 + i) % 7
+    s
+fn f282(x)
+    s = 0
+    for i in 0..3 -> s += (x * 282 + i) % 7
+    s
+fn f283(x)
+    s = 0
+    for i in 0..3 -> s += (x * 283 + i) % 7
+    s
+fn f284(x)
+    s = 0
+    for i in 0..3 -> s += (x * 284 + i) % 7
+    s
+fn f285(x)
+    s = 0
+    for i in 0..3 -> s += (x * 285 + i) % 7
+    s
+fn f286(x)
+    s = 0
+    for i in 0..3 -> s += (x * 286 + i) % 7
+    s
+fn f287(x)
+    s = 0
+    for i in 0..3 -> s += (x * 287 + i) % 7
+    s
+fn f288(x)
+    s = 0
+    for i in 0..3 -> s += (x * 288 + i) % 7
+    s
+fn f289(x)
+    s = 0
+    for i in 0..3 -> s += (x * 289 + i) % 7
+    s
+fn f290(x)
+    s = 0
+    for i in 0..3 -> s += (x * 290 + i) % 7
+    s
+fn f291(x)
+    s = 0
+    for i in 0..3 -> s += (x * 291 + i) % 7
+    s
+fn f292(x)
+    s = 0
+    for i in 0..3 -> s += (x * 292 + i) % 7
+    s
+fn f293(x)
+    s = 0
+    for i in 0..3 -> s += (x * 293 + i) % 7
+    s
+fn f294(x)
+    s = 0
+    for i in 0..3 -> s += (x * 294 + i) % 7
+    s
+fn f295(x)
+    s = 0
+    for i in 0..3 -> s += (x * 295 + i) % 7
+    s
+fn f296(x)
+    s = 0
+    for i in 0..3 -> s += (x * 296 + i) % 7
+    s
+fn f297(x)
+    s = 0
+    for i in 0..3 -> s += (x * 297 + i) % 7
+    s
+fn f298(x)
+    s = 0
+    for i in 0..3 -> s += (x * 298 + i) % 7
+    s
+fn f299(x)
+    s = 0
+    for i in 0..3 -> s += (x * 299 + i) % 7
+    s
+total = 0
+for r in 0..250
+    total += f0(r)
+    total += f1(r)
+    total += f2(r)
+    total += f3(r)
+    total += f4(r)
+    total += f5(r)
+    total += f6(r)
+    total += f7(r)
+    total += f8(r)
+    total += f9(r)
+    total += f10(r)
+    total += f11(r)
+    total += f12(r)
+    total += f13(r)
+    total += f14(r)
+    total += f15(r)
+    total += f16(r)
+    total += f17(r)
+    total += f18(r)
+    total += f19(r)
+    total += f20(r)
+    total += f21(r)
+    total += f22(r)
+    total += f23(r)
+    total += f24(r)
+    total += f25(r)
+    total += f26(r)
+    total += f27(r)
+    total += f28(r)
+    total += f29(r)
+    total += f30(r)
+    total += f31(r)
+    total += f32(r)
+    total += f33(r)
+    total += f34(r)
+    total += f35(r)
+    total += f36(r)
+    total += f37(r)
+    total += f38(r)
+    total += f39(r)
+    total += f40(r)
+    total += f41(r)
+    total += f42(r)
+    total += f43(r)
+    total += f44(r)
+    total += f45(r)
+    total += f46(r)
+    total += f47(r)
+    total += f48(r)
+    total += f49(r)
+    total += f50(r)
+    total += f51(r)
+    total += f52(r)
+    total += f53(r)
+    total += f54(r)
+    total += f55(r)
+    total += f56(r)
+    total += f57(r)
+    total += f58(r)
+    total += f59(r)
+    total += f60(r)
+    total += f61(r)
+    total += f62(r)
+    total += f63(r)
+    total += f64(r)
+    total += f65(r)
+    total += f66(r)
+    total += f67(r)
+    total += f68(r)
+    total += f69(r)
+    total += f70(r)
+    total += f71(r)
+    total += f72(r)
+    total += f73(r)
+    total += f74(r)
+    total += f75(r)
+    total += f76(r)
+    total += f77(r)
+    total += f78(r)
+    total += f79(r)
+    total += f80(r)
+    total += f81(r)
+    total += f82(r)
+    total += f83(r)
+    total += f84(r)
+    total += f85(r)
+    total += f86(r)
+    total += f87(r)
+    total += f88(r)
+    total += f89(r)
+    total += f90(r)
+    total += f91(r)
+    total += f92(r)
+    total += f93(r)
+    total += f94(r)
+    total += f95(r)
+    total += f96(r)
+    total += f97(r)
+    total += f98(r)
+    total += f99(r)
+    total += f100(r)
+    total += f101(r)
+    total += f102(r)
+    total += f103(r)
+    total += f104(r)
+    total += f105(r)
+    total += f106(r)
+    total += f107(r)
+    total += f108(r)
+    total += f109(r)
+    total += f110(r)
+    total += f111(r)
+    total += f112(r)
+    total += f113(r)
+    total += f114(r)
+    total += f115(r)
+    total += f116(r)
+    total += f117(r)
+    total += f118(r)
+    total += f119(r)
+    total += f120(r)
+    total += f121(r)
+    total += f122(r)
+    total += f123(r)
+    total += f124(r)
+    total += f125(r)
+    total += f126(r)
+    total += f127(r)
+    total += f128(r)
+    total += f129(r)
+    total += f130(r)
+    total += f131(r)
+    total += f132(r)
+    total += f133(r)
+    total += f134(r)
+    total += f135(r)
+    total += f136(r)
+    total += f137(r)
+    total += f138(r)
+    total += f139(r)
+    total += f140(r)
+    total += f141(r)
+    total += f142(r)
+    total += f143(r)
+    total += f144(r)
+    total += f145(r)
+    total += f146(r)
+    total += f147(r)
+    total += f148(r)
+    total += f149(r)
+    total += f150(r)
+    total += f151(r)
+    total += f152(r)
+    total += f153(r)
+    total += f154(r)
+    total += f155(r)
+    total += f156(r)
+    total += f157(r)
+    total += f158(r)
+    total += f159(r)
+    total += f160(r)
+    total += f161(r)
+    total += f162(r)
+    total += f163(r)
+    total += f164(r)
+    total += f165(r)
+    total += f166(r)
+    total += f167(r)
+    total += f168(r)
+    total += f169(r)
+    total += f170(r)
+    total += f171(r)
+    total += f172(r)
+    total += f173(r)
+    total += f174(r)
+    total += f175(r)
+    total += f176(r)
+    total += f177(r)
+    total += f178(r)
+    total += f179(r)
+    total += f180(r)
+    total += f181(r)
+    total += f182(r)
+    total += f183(r)
+    total += f184(r)
+    total += f185(r)
+    total += f186(r)
+    total += f187(r)
+    total += f188(r)
+    total += f189(r)
+    total += f190(r)
+    total += f191(r)
+    total += f192(r)
+    total += f193(r)
+    total += f194(r)
+    total += f195(r)
+    total += f196(r)
+    total += f197(r)
+    total += f198(r)
+    total += f199(r)
+    total += f200(r)
+    total += f201(r)
+    total += f202(r)
+    total += f203(r)
+    total += f204(r)
+    total += f205(r)
+    total += f206(r)
+    total += f207(r)
+    total += f208(r)
+    total += f209(r)
+    total += f210(r)
+    total += f211(r)
+    total += f212(r)
+    total += f213(r)
+    total += f214(r)
+    total += f215(r)
+    total += f216(r)
+    total += f217(r)
+    total += f218(r)
+    total += f219(r)
+    total += f220(r)
+    total += f221(r)
+    total += f222(r)
+    total += f223(r)
+    total += f224(r)
+    total += f225(r)
+    total += f226(r)
+    total += f227(r)
+    total += f228(r)
+    total += f229(r)
+    total += f230(r)
+    total += f231(r)
+    total += f232(r)
+    total += f233(r)
+    total += f234(r)
+    total += f235(r)
+    total += f236(r)
+    total += f237(r)
+    total += f238(r)
+    total += f239(r)
+    total += f240(r)
+    total += f241(r)
+    total += f242(r)
+    total += f243(r)
+    total += f244(r)
+    total += f245(r)
+    total += f246(r)
+    total += f247(r)
+    total += f248(r)
+    total += f249(r)
+    total += f250(r)
+    total += f251(r)
+    total += f252(r)
+    total += f253(r)
+    total += f254(r)
+    total += f255(r)
+    total += f256(r)
+    total += f257(r)
+    total += f258(r)
+    total += f259(r)
+    total += f260(r)
+    total += f261(r)
+    total += f262(r)
+    total += f263(r)
+    total += f264(r)
+    total += f265(r)
+    total += f266(r)
+    total += f267(r)
+    total += f268(r)
+    total += f269(r)
+    total += f270(r)
+    total += f271(r)
+    total += f272(r)
+    total += f273(r)
+    total += f274(r)
+    total += f275(r)
+    total += f276(r)
+    total += f277(r)
+    total += f278(r)
+    total += f279(r)
+    total += f280(r)
+    total += f281(r)
+    total += f282(r)
+    total += f283(r)
+    total += f284(r)
+    total += f285(r)
+    total += f286(r)
+    total += f287(r)
+    total += f288(r)
+    total += f289(r)
+    total += f290(r)
+    total += f291(r)
+    total += f292(r)
+    total += f293(r)
+    total += f294(r)
+    total += f295(r)
+    total += f296(r)
+    total += f297(r)
+    total += f298(r)
+    total += f299(r)
+print(total)

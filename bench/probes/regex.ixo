@@ -1,0 +1,10 @@
+fn run(n)
+    lines = []
+    for i in 0..n -> lines.add(f"user{i}@host{i % 50}.example.com sent {i * 3} bytes")
+    hits = 0
+    total = 0
+    for l in lines
+        if re.test(r"@host1\d\.", l) -> hits += 1
+        total += re.find_all(r"\d+", l).len
+    print(hits, total)
+run(50_000)

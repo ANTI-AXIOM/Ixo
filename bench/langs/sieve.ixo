@@ -1,0 +1,18 @@
+# prime sieve: list writes and reads
+fn run(n)
+    flags = [true] * (n + 1)
+    flags[0] = false
+    flags[1] = false
+    i = 2
+    while i * i <= n
+        if flags[i]
+            j = i * i
+            while j <= n
+                flags[j] = false
+                j += i
+        i += 1
+    count = 0
+    for f in flags
+        if f -> count += 1
+    count
+print(run(2_000_000))

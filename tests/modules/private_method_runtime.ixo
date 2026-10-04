@@ -1,0 +1,4 @@
+use lib.geometry
+rs = [Rect(1, 1), 0]
+rs[0].hidden   # expect panic: method 'hidden' of Rect is private
+# expect: geometry loaded

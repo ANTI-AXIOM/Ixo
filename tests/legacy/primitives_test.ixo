@@ -1,0 +1,27 @@
+print("--- Primitives Test ---")    # expect: --- Primitives Test ---
+
+print("Sqrt(16):", 16.sqrt)        # expect: Sqrt(16): 4.0
+print("Abs(-5):", (-5).abs)          # expect: Abs(-5): 5
+print("String Len:", "hello".len)  # expect: String Len: 5
+print("Upper:", "ixolang".up)      # expect: Upper: IXOLANG
+
+l = [3, 1, 4, 2]
+print("Sorted:", l.sort)           # expect: Sorted: [1, 2, 3, 4]
+print("Original:", l)              # expect: Original: [3, 1, 4, 2]
+
+print("--- Stepped Range ---")     # expect: --- Stepped Range ---
+for i in 0..10 by 2
+    print("Step 2:", i)
+# expect: Step 2: 0
+# expect: Step 2: 2
+# expect: Step 2: 4
+# expect: Step 2: 6
+# expect: Step 2: 8
+
+print("--- Negative Step ---")     # expect: --- Negative Step ---
+for i in 10..0 by -3
+    print("Backwards:", i)
+# expect: Backwards: 10
+# expect: Backwards: 7
+# expect: Backwards: 4
+# expect: Backwards: 1

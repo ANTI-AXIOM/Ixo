@@ -1,0 +1,23 @@
+# 3D math: vectors, matrices and quaternions.
+
+a = vec(1, 0, 0)
+b = vec(0, 1, 0)
+print(f"a + b = {a + b}, |a + b| = {(a + b).len:.3f}")
+print(f"a . b = {a.dot(b)}, a x b = {a.cross(b)}")
+
+# rotate a point 90 degrees around the z axis
+q = quat.axis(vec(0, 0, 1), math.pi / 2)
+p = q.turn(vec(2, 0, 0))
+print(f"rotated: ({p.x:.3f}, {p.y:.3f}, {p.z:.3f})")
+
+# model-view-projection, like a renderer would build it
+model = mat.translate(vec(0, 0, -5)) * mat.rotate(vec(0, 1, 0), 0.5)
+view = mat.look_at(vec(0, 2, 3), vec(0, 0, -5), vec(0, 1, 0))
+proj = mat.perspective(1.0, 16 / 9, 0.1, 100)
+mvp = proj * view * model
+corner = mvp.apply(vec(1, 1, 1))
+print(f"projected corner: ({corner.x:.3f}, {corner.y:.3f}, {corner.z:.3f})")
+
+inv = mvp.inv ! err -> mat.identity(4)
+back = inv.apply(corner)
+print(f"back again: ({back.x:.2f}, {back.y:.2f}, {back.z:.2f})")

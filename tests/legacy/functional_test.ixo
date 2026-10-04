@@ -1,0 +1,23 @@
+print("--- Functional Test ---")    # expect: --- Functional Test ---
+
+l = [1, 2, 3, 4, 5]
+
+print("Map (_ * 2):")              # expect: Map (_ * 2):
+doubled = l.map(_ * 2)
+print(doubled)                     # expect: [2, 4, 6, 8, 10]
+
+print("Keep (_ > 3):")             # expect: Keep (_ > 3):
+kept = l.keep(_ > 3)
+print(kept)                        # expect: [4, 5]
+
+print("Sort Descending (_b < _a):")  # expect: Sort Descending (_b < _a):
+desc = l.sort(_b < _a)
+print(desc)                        # expect: [5, 4, 3, 2, 1]
+
+print("Each (print):")             # expect: Each (print):
+l.each(print(_))
+# expect: 1
+# expect: 2
+# expect: 3
+# expect: 4
+# expect: 5

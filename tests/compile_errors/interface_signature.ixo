@@ -1,0 +1,7 @@
+interface Shape
+    fn area: float
+    fn scale(k: float)
+class Sq(s) is Shape
+    fn area: str = "big"      # expect error: Sq.area returns str, but Shape.area should return float
+    fn scale(k: str)            # expect error: parameter 'k' of Sq.scale is str, but Shape.scale passes float
+        self.s = self.s

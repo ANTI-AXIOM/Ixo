@@ -1,0 +1,2 @@
+fn f = 1
+fn f = 2   # expect error: 'f' is already defined

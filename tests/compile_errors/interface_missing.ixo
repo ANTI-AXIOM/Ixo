@@ -1,0 +1,6 @@
+interface Named
+    fn name
+    fn greet = f"hi {self.name}"
+
+class Dog is Named   # expect error: Dog doesn't define 'name', which Named requires
+    fn bark = "woof"

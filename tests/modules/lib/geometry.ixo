@@ -1,0 +1,11 @@
+# A module used by the modules tests.
+print("geometry loaded")
+
+fn area*(w, h) = w * h
+fn secret(x) = x
+fn helper_uses_secret*(x) = secret(x) + 1
+
+class Rect*(w, h)
+    fn area* = self.w * self.h
+    fn hidden = 42
+    fn peek* = self.hidden

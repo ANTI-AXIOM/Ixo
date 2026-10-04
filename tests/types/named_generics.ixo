@@ -1,0 +1,12 @@
+class Cache[Key, Value]
+    data: map[Key, Value] = {}
+    fn put(k: Key, v: Value)
+        data[k] = v
+    fn get(k: Key): Value? = data.get(k)
+c: Cache[str, int] = Cache()
+c.put("a", 1)
+n: int = c.get("a") or 0
+print(n)                          # expect: 1
+fn first[Item](xs: list[Item]): Item = xs[0]
+s: str = first(["x", "y"])
+print(s)                          # expect: x

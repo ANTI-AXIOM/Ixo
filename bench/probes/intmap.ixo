@@ -1,0 +1,10 @@
+fn run(n)
+    m = {}
+    for i in 0..n -> m[i * 7] = i
+    st = {0}
+    for i in 0..n -> st.add(i * 3)
+    hits = 0
+    for i in 0..n
+        if m.has(i) -> hits += 1
+    print(m.len, st.len, hits)
+run(1_000_000)

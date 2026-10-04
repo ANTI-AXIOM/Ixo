@@ -1,0 +1,12 @@
+ch = flow()
+t = fork producer(ch)
+fn producer(c)
+    for i in 0..3 -> i :> c
+    c.close
+    "done"
+for v <: ch -> print(v)
+# expect: 0
+# expect: 1
+# expect: 2
+print(t.await)                        # expect: done
+print(t.done)                         # expect: true

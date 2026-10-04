@@ -1,0 +1,37 @@
+interface Shape
+    fn area
+    fn describe = f"a shape with area {self.area}"
+
+class Square(side) is Shape
+    fn area = self.side * self.side
+
+class Circle(r) is Shape
+    fn area = 3 * self.r * self.r
+    fn describe = "a circle"
+
+shapes = [Square(2), Circle(1)]
+for s in shapes
+    print(s.describe)
+# expect: a shape with area 4
+# expect: a circle
+
+fn total(xs: list[Shape]): int = xs.map(_.area).sum
+print(total(shapes))                  # expect: 7
+
+# structural: any class with the methods counts
+class Blob
+    fn area = 10
+print(Blob() is Shape)                # expect: true
+print(5 is Shape)                     # expect: false
+
+fn biggest(a: Shape, b: Shape) = if a.area > b.area -> a else b
+print(biggest(Square(3), Blob()).area)  # expect: 10
+
+match Circle(2)
+    Shape -> print("matched shape")   # expect: matched shape
+    _ -> print("no")
+
+print(Square(1) is Square, Square(1) is Circle, Square(1) is not Shape)  # expect: true false false
+
+# a class that doesn't provide what its interface requires is a compile error in
+# tests/compile_errors/interface_missing.ixo

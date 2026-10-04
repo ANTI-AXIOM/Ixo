@@ -1,0 +1,7 @@
+fn save(path, overwrite = false)
+    path
+save("x", overwrit: true)     # expect error: save() has no parameter 'overwrit' (did you mean 'overwrite'?)
+save(overwrite: true)         # expect error: save() is missing the argument 'path'
+save("x", path: "y")          # expect error: the argument 'path' is given twice
+print(1, sep: " ")            # expect error: print() is built in and doesn't take named arguments
+save(overwrite: true, "x")    # expect error: positional arguments go before named ones

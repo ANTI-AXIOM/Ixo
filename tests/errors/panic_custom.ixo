@@ -1,0 +1,1 @@
+panic("custom failure")   # expect panic: custom failure

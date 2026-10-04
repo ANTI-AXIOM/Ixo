@@ -1,0 +1,2 @@
+fn r(n) = r(n + 1)
+r(0)   # expect panic: stack overflow

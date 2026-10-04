@@ -1,0 +1,1 @@
+fn f(p: Pointt) = p   # expect error: unknown type 'Pointt'

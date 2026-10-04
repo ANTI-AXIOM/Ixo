@@ -1,0 +1,2 @@
+s = 0
+for x in 0..5 by s -> print(x)       # expect panic: range step can't be 0

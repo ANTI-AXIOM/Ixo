@@ -1,0 +1,1 @@
+for x in 5 -> print(x)   # expect error: can't loop over a int

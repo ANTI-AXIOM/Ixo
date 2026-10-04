@@ -1,0 +1,20 @@
+fn area(w: float, h: float): float
+    w * h
+print(area(2, 3))                    # expect: 6.0
+class Person(name: str)
+fn name_of(p: Person): str
+    p.name
+print(name_of(Person("Al")))         # expect: Al
+x: int = 5
+print(x)                             # expect: 5
+fn maybe(v: int?): str
+    if v == nil -> "none" else str(v)
+print(maybe(nil), maybe(3))          # expect: none 3
+fn risky(n: int): int ! Error
+    if n < 0 -> return Error.Negative
+    n
+print(risky(-1), risky(2))           # expect: Error.Negative 2
+vals = [1, "two"]
+fn only_int(n: int) = n
+print(only_int(vals[0]))             # expect: 1
+only_int(vals[1])                    # expect panic: argument 'n' of only_int should be int, got str

@@ -1,0 +1,10 @@
+fn run(n)
+    text = "the quick brown fox jumps over the lazy dog " * 2000
+    parts = []
+    for i in 0..n
+        k = i % 80_000
+        parts.add(text.slice(k, k + 12))
+    total = 0
+    for p in parts -> total += p.len
+    print(parts.len, total)
+run(500_000)

@@ -1,0 +1,17 @@
+class Account(owner, balance)
+    fn deposit(n)
+        self.balance += n
+    fn reset
+        self.deposit(-self.balance)
+
+fn a(acc: & Account)
+    acc.balance = 0          # expect error: 'acc' is borrowed read-only (acc: &Account), so it can't be changed here
+fn b(acc: & Account)
+    acc.reset                # expect error: calling .reset (which changes it) isn't allowed
+fn c(xs: & list[int])
+    xs.add(1)                # expect error: 'xs' is borrowed read-only (xs: &list[int]), so calling .add
+fn d(m: & map[str, int])
+    m["k"] = 1               # expect error: 'm' is borrowed read-only
+fn change(acc: & mut Account) = acc.deposit(1)
+fn e(acc: & Account)
+    change(acc)              # expect error: it can't be passed on to change(), which may change it

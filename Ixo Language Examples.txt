@@ -1,174 +1,469 @@
-# Ixo Language Examples :
+# Ixo Language Examples
 
-# One-line Commentary
+# ────────────────────────────────────────────────
+# Modules & Imports
+# ────────────────────────────────────────────────
 
-"""
-    Multi-Line Commentary
-"""
+# Import everything exported (marked with *) from 'math'
+use math
+# Now we can use 'sqrt' or 'sin' directly
+16.sqrt
 
-# Defining a function
+# Optimized Import: Import only specific items
+in net use http
+in physics use gravity, collider
 
-func foo()
+# Defining Exports (in another file)
+# * must be included as the last caracter of the function declaration
+# but before the function return type declaration.
+fn internal_helper        # Private (default)
+fn calculate_physics*     # Public/Exported (marked with *)
 
-# Defining a class
+class PublicType*         # Public class
+    fn get_id(id)* -> int # Public method
+    fn reset              # Private method
 
-class myclass()
+# ────────────────────────────────────────────────
+# Basic Syntax
+# ────────────────────────────────────────────────
 
-# Parameters inside a function
-
-func foo(a, b)
-
-"""
-  Enforce input/output type of function (keep in mind that it is not necessary, here for hardcoding) :
-  Adding a type will require a return statement
-  - number: byte, short, int, float, double, complex (for complex numbers only : i or j)
-  - string: str, char
-  - boolean: bool
-  - tuple: tuple
-  - list: list
-  - dictionary: dict
-"""
-
-func foo(variable: type): type
-
-# Examples :
-
-func foo(a: float, b: int): int
-    # Some commands
-    return int
-
-func foo(a, b): str
-    return "Hello World"
-
-func foo(a, b): bool
-    return true # Or false
-
-func foo(a, b): tuple[int, char, dict]
-    return [x, 'y', {"name": z, "value": 3}]
-
-func foo(a, b): list # Or use dict for a dictionary
-    return [x1, y1, x2, y2]
+# One-line comment
 
 """
-    Conditions:
-    - if/elif/else
-    - while/case/break/switch
-    - for
-    - do/while
-    - with
-    - try/except
+    Multi-line comment
 """
 
-func foo(a, b)
-    if condition
-        # Execute some commands
-    # elif or else depending on the outcome (but can be omitted)
+# Function definition
+fn foo                        # doesn't have to have parentheses int the
+                              # definition of the function if it doesn't
+                              # take parameters
 
-# When you only have one command after a condition, you can write :
+# Class definition
+class Player
 
-func foo(a, b)
-    if condition -> # Command here
-        # Or Command here
+# Function with parameters
+fn attack(target, damage)
 
-func foo(a, b)
-    while condition
-        # Execute some commands
-    # Can add an else statement to execute after the loop is finished
+# Implicit typing (default)
+fn distance(x, y)             # doesn't have to explicitly type variables.
+    (x*x + y*y).sqrt          # postfix math
 
-func foo(a, b)
-    for i in [min, max], step       # (min and max included)
-        # Execute some commands
-    # Can add an else statement to execute after the loop is finished
+fn clamp(value, min, max)
+    if value < min -> return min
+    if value > max -> return max
+    value                     # implicit return
 
-func foo(a, b)
-    switch condition
-        case a
-            # Execute some commands
-            break
-        case b
-            # Execute some commands
-            break
-        default
-            # Execute some commands
+# Optional: Explicit Typing & Parameter Modes
+# You can add types for documentation or strictness
+fn add(a: int, b: int) -> int
+    a + b
 
-func foo(a, b)
-    do
-        # Execute some commands
-    while condition
+# Parameter modes (borrowing vs moving)
+fn read_point(p: &Point)                # immutable borrow
+fn update_point(p: &mut Point)          # mutable borrow
+fn consume_point(p: Point)              # take ownership (move)
+fn mutate_and_keep(mut p: Point)        # mutable + take ownership
 
-func foo(a, b)
-    with condition
-        # Execute some commands
+# Control structures
+if health <= 0
+    die
 
-func foo(a, b)
-    try
-        # Execute some commands
-    except error_type
-        # Execute some commands
+if ready -> launch                # single-line arrow style
+elif not ready -> wait_for_launch
+else -> do_something_else
 
-"""
-    Operators
+# Expression Assignment (Everything returns value)
+status = if ready -> launch
+         else -> wait_for_launch
 
-    Arithmetic operators
-    - a++
-    - a--
-    - a**           # a * a
-    - a//           # sqrt(a)
-    - |a|           # abs(a)
-    - a + b
-    - a - b
-    - a * b
-    - a / b
-    - a % b
-    - a ** b
+while condition
+    do_something
 
-    Relational operators
-    - a in b        or : a ~ b
-    - a not in b    or : a !~ b
-    - a equal b     or : a == b
-    - a diff b      or : a != b
-    - a < b
-    - a <= b
-    - a > b
-    - a >= b
+for i in 0..=100, 5
+    # if you do not need to access the index, use _ (no memory allocation)
+    i.print
 
-    Logical operators
-    - a and b       or : a && b
-    - a or b        or : a || b
-    - not           or : ! (inverts the output)
+for i in 0..<players.len            # exclusive upper bound
+    players[i].update
 
-    Assignment operators
-    - a = b
-    - a += b
-    - a -= b
-    - a *= b
-    - a /= b
-    - a %= b
-    - a **= b
+# Match syntax
 
-    Bitwise operators
-    - a & b
-    - a | b
-    - a ^ b
-    - a << b
-    - a >> b
-
-    Identity operators
-    - a === b
-    - a !== b
+match status
+    "ok"                -> return data
+    "error"             -> return print("operation failed")
+    200..=299           -> process_success
+    400|401|403         -> handle_client_error
+    code if code >= 500 -> server_panic(code)
+    (x, 0)              -> f"on x-axis: {x}"
+    Point(x, y)         -> f"({x}, {y})"
+    [head, ..tail]      -> process_list(head, tail)
+    str as msg        -> msg.log_message
+    _
+        # Multi-line match possible
+        default_handler
+        do_something_else
 
 """
+    Error handling
 
-# Main Example
+    Functions that can fail usually return T ! Error (T or error)
 
-class example()
+    Return type T ! Error means:
+    - success → returns value of type T
+    - failure → returns an error value (type Error or subtype)
+    The ! branch is executed only on failure
 
-    func example_function(a, b)
-        if a >= b -> return a **= b
+    # In error branch:
+    retry              # retry immediately
+    retry 3            # limited retry (optional)
+    retry 500ms        # delay before retry
 
-        while a <= b -> a++
+    Examples:
 
-    func hardcoded_example_function(a: int, b: int): int
-        if a >= b -> return a **= b
+    content = fs.read(path) ! err
+        err.log_error("Read failed:")
+        return null
 
-        while a <= b -> a++
+    value = risky_calc ! e -> return Error.CalculationFailed(e)
+
+    data = api.fetch ! err
+        retry_count++
+        if retry_count > 3 -> return Error.MaxRetries
+        retry 500ms
+
+        # Propagating (Passing the buck), using ?
+        fn read_config
+            file = fs.open("config")?   
+            # If open fails, read_config returns the error NOW
+            data = file.read?
+            # If read fails, read_config returns the error NOW
+            data.parse
+"""
+
+# Arithmetic (no auto-assign)
+a + b   a - b   a * b   a / b   a % b   a ** b
+
+# Auto-increment / decrement
+a++                     # a += 1
+a--                     # a -= 1
+a**=b                   # a = a ** b
+
+# Assignment operators
+a = b   a += b   a -= b   a *= b   a /= b   a %= b
+
+# Comparison & logic
+a == b   a != b   a < b   a <= b   a > b   a >= b
+a in b   a not in b
+a and b  
+a or b   
+not a
+
+# Identity comparison
+a is b   a is not b
+
+# Convenience (Postfix preferred)
+x.abs    x.sqrt    x.pow(n)
+
+
+# Garbage collection
+# Code is automatically garbage collected unless specified otherwise
+
+"""
+    @arena        generic bump arena
+    @temp         single-use temporary / scratch
+    @frame        per-frame (games, rendering)
+    @dual         double-buffered / ping-pong
+                    has methods .swap, .current, .other
+    @req          per-request / per-level / per-job
+    @cache        persistent until reset
+                    has methods .reset, .clear, .load and .size
+    @thread       thread-local scratch
+"""
+
+# Generic temporary
+@arena
+    big_temp = Array[byte](10 * 1024 * 1024)
+    big_temp.process_data
+
+# Inline possible aswell
+@arena -> process_data(Array[byte](10 * 1024 * 1024))
+
+# Per-frame (games)
+@frame
+    view_matrix  = camera.view
+    proj_matrix  = camera.projection
+    visible_lights = collect_lights
+    # all gone after frame
+
+# Double-buffered (your choice: @dual)
+@dual shadow_maps
+    shadow_maps.current.clear
+    shadow_maps.current.render_shadows
+    shadow_maps.swap
+    shadow_maps.current.apply_shadows
+
+# Per-request (web/server)
+@req
+    request_buffer = ByteBuffer(16 * 1024 * 1024)
+    request_buffer.parse_http
+    request_buffer.generate_response
+    # gone after handler finishes
+
+# Persistent cache
+@cache assets
+    if assets.is_empty -> assets.load("level.pack")
+    assets.spawn_entities
+    # stays alive until assets.reset or assets.clear
+
+# Thread-local fast scratch
+@thread
+    local_stack = Array[f32](2048)
+    compute_temp_values(local_stack)
+    # thread-private, gone at end of block
+
+
+# Concurrency
+
+# fork fn ...       → starts a lightweight concurrent task (non-blocking)
+# flow[T]           → safe directed data pipe (send :> / receive <:)
+# close(flow)       → signals no more values will be sent
+# with tasks        → auto-awaits and cleans up all forked tasks inside
+
+# Create flows (safe data pipes)
+jobs    = flow[int](100)                     # buffered
+results = flow[Result[str, Error]]           # unbuffered
+
+# Send: value :> flow   (push right)
+# Receive: value <: flow (pull left)
+
+# Fork starts a lightweight concurrent task
+fork fn worker(id: int, jobs: flow[int], results: flow[Result[str, Error]])
+    for job <: jobs
+        job.compute :> results
+
+# Full example: concurrent workers
+fn main
+# Unless specified, the whole file is implicitely the main function.
+    jobs    = flow[int](100)
+    results = flow[Result[str, Error]](100)
+
+    for i in 1..=8
+        fork worker(i, jobs, results)
+
+    # send work (arrow style)
+    for j in 1..=1000 -> j :> jobs
+
+    jobs.close
+
+    # receive results
+    for _ in 1..=1000
+        result <: results
+        result ! err -> err.log_error
+        result.print
+
+# Structured concurrency (auto-wait & cleanup)
+with tasks
+    for url in urls
+        fork fetch(url) -> page
+            page.process
+
+    # block ends → all forked tasks are awaited automatically
+
+# With arenas (zero-pause concurrency)
+@frame
+    fork update_particles(particle_pool)
+    fork update_lights(light_cache)
+    # both forked tasks share the @frame arena → no GC pauses
+
+# Future: JIT compilation
+# Hot functions/loops are automatically compiled to native code via LLVM
+# Optional hints: $jit fn ..., $hot for ..., $nojit fn ...
+# Goal: near C++ performance in long-running code
+# Optional hints (rarely needed)
+
+$jit fn heavy_math_loop
+    # this function will be JIT-compiled as soon as possible
+
+$nojit fn debug_only
+    # never JIT this (easier debugging)
+
+$hot for i in 0..1000000
+    # hint: try to JIT this loop early
+
+@frame $jit
+    # JIT + arena → zero-pause + native speed in rendering
+    fork render_thread
+
+# Ixo Standard Library – core types & functions
+# (available without import)
+
+# ────────────────────────────────────────────────
+# Collections
+# ────────────────────────────────────────────────
+
+list[T]                     # dynamic array
+    .len
+    .add(value)
+    .take -> T?
+    .get(i) -> T?
+    .set(i, value)
+    .wipe
+    .sort                   # returns a new sorted list
+    .sort!                  # in-place sort
+    .each -> ...            # arrow iteration
+    .map -> ...             # arrow map
+    .keep -> ...            # arrow filter
+    .fold(start, -> ...) -> U
+
+    # Examples of Universal Underscore:
+    # Single arg:
+    # names = users.map(_.name)
+    #
+    # Named Holes (multi-arg):
+    # sorted = items.sort(_a.size < _b.size)
+    # If you use _name, it signals to the compiler/reader 
+    # "This is temporary, do not allocate heap memory for this".
+
+map[K, V]                   # hash map
+    .len
+    .get(key) -> V?
+    .set(key, value)
+    .drop(key)
+    .keys -> list[K]
+    .values -> list[V]
+    .pairs -> list[(K, V)]
+
+set[T]                      # hash set
+    .add(value)
+    .drop(value)
+    .has(value) -> bool
+    .count(value) -> int
+
+# ────────────────────────────────────────────────
+# Math & geometry – unified constructors
+# ────────────────────────────────────────────────
+
+x.abs
+x.sqrt
+x.pow(n)
+x.sin x.cos x.tan
+x.asin x.acos x.atan
+x.ln x.log(base) x.exp
+
+vec(n: int, values: list[float]) -> vec     # n = 2,3,4,...
+# examples
+v = vec(3, [1, 0, 0])
+up = vec(3, [0, 1, 0])
+
+vec
+    .len -> float
+    .unit -> vec
+    .dot(other) -> float
+    .cross(other) -> vec     # only 3D
+    .mix(other, t) -> vec
+
+mat([rows, cols]: list[int], values: list[float]) -> mat
+# examples
+m = mat([4, 4], flat_4x4)
+view = camera.view
+proj = camera.proj
+mvp = proj * view * model
+
+mat
+    .mul(other) -> mat
+    .apply(v: vec) -> vec
+    .trans
+    .inv -> mat ! err
+
+quat(x, y, z, w) -> quat
+    .axis(axis: vec, angle: float)
+    .mul(other)
+    .turn(v: vec) -> vec
+
+# ────────────────────────────────────────────────
+# Random
+# ────────────────────────────────────────────────
+
+rng -> rng
+    .float -> float           # [0,1)
+    .int(min, max) -> int
+    .pick(list) -> T
+    .mix(list)
+
+# ────────────────────────────────────────────────
+# Strings
+# ────────────────────────────────────────────────
+
+str
+    .len
+    .up
+    .down
+    .trim
+    .cut(sep) -> list[str]
+    .join(sep, list[str]) -> str
+    .has(substr) -> bool
+    .repeat(n) -> str
+
+f"{name} {age}"             # formatted string
+
+# ────────────────────────────────────────────────
+# I/O & net
+# ────────────────────────────────────────────────
+
+fs
+    .read(path) -> str ! err
+    .read_bytes(path) -> bytes ! err
+    .write(path, content)
+    .write_bytes(path, bytes)
+    .has(path) -> bool
+    .drop(path)
+    .make(path)
+
+net
+    .read(url) -> bytes ! err
+    .write(url, body) -> bytes ! err
+
+# ────────────────────────────────────────────────
+# Time
+# ────────────────────────────────────────────────
+
+now() -> time
+time
+    .year .month .day .hour .min .sec
+    .show(pattern) -> str
+    .add(seconds) -> time
+
+ms.wait
+
+# ────────────────────────────────────────────────
+# Algorithms & helpers
+# ────────────────────────────────────────────────
+
+items.min -> T?
+items.max -> T?
+items.sum -> T
+items.prod -> T
+
+list.sort -> list
+list.sort!                  # in-place sort
+
+sorted.find(value) -> int?
+
+value.clamp(min, max)
+a.lerp(b, t)            # linear interpolation
+
+# Quick showcase – concurrent 3D particle update
+fn update_particles
+    @frame $jit
+        positions = flow[vec]
+        velocities = flow[vec]
+
+        fork generate_particles -> p
+            p :> positions
+
+        fork apply_forces(positions) -> new_pos
+            new_pos :> velocities
+
+        for pos <: positions, vel <: velocities
+            pos + vel * delta -> pos
+            pos.print

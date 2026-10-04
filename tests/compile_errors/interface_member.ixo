@@ -1,0 +1,4 @@
+interface Sized
+    fn size
+fn show(s: Sized) = s.sise   # expect error: the interface Sized has no method 'sise' (did you mean 'size'?)
+show(5)                      # expect error: argument 1 of show() should be Sized, got int

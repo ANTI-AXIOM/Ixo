@@ -1,0 +1,118 @@
+name: Release
+
+# Push a tag like v0.5.0 to build the binaries and the VS Code extension and
+# attach them to a draft GitHub release. Nothing is published until the draft
+# is published by hand. The extension also goes to the VS Code Marketplace
+# when the repository has a VSCE_PAT secret (and to Open VSX with OVSX_PAT).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04      # an older glibc, so the binary runs on more systems
+            name: linux-x86_64
+          - os: ubuntu-22.04-arm
+            name: linux-arm64
+          - os: macos-latest
+            name: macos-arm64
+          - os: macos-13
+            name: macos-x86_64
+          - os: windows-latest
+            name: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc zip
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash build.sh
+      - name: Build
+        if: runner.os != 'Windows'
+        run: bash build.sh
+        env:
+          CXX: ${{ runner.os == 'macOS' && 'clang++' || 'g++' }}
+          IXO_LDFLAGS: ${{ runner.os == 'Linux' && '-static-libstdc++ -static-libgcc' || '' }}
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          got=$(build/release/ixo* version)
+          want="ixo ${GITHUB_REF_NAME#v}"
+          [ "$got" = "$want" ] || { echo "the binary says '$got' but the tag is $GITHUB_REF_NAME"; exit 1; }
+      - name: Tests
+        shell: bash
+        run: python3 tests/run.py || python tests/run.py
+      - name: Package
+        shell: bash
+        run: |
+          dir=ixo-${{ matrix.name }}
+          mkdir -p $dir
+          cp build/release/ixo* $dir/
+          cp README.md $dir/
+          cp -r docs examples $dir/
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a -tzip $dir.zip $dir > /dev/null
+          else
+            tar czf $dir.tar.gz $dir
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ixo-${{ matrix.name }}
+          path: ixo-${{ matrix.name }}.*
+
+  extension:
+    runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Package
+        working-directory: editors/vscode
+        run: npx --yes @vscode/vsce package --out ../../ixo-vscode.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ixo-vscode
+          path: ixo-vscode.vsix
+      - name: Publish to the VS Code Marketplace
+        if: startsWith(github.ref, 'refs/tags/v') && env.VSCE_PAT != ''
+        run: npx --yes @vscode/vsce publish --packagePath ixo-vscode.vsix
+      - name: Publish to Open VSX
+        if: startsWith(github.ref, 'refs/tags/v') && env.OVSX_PAT != ''
+        run: npx --yes ovsx publish ixo-vscode.vsix -p "$OVSX_PAT"
+
+  release:
+    needs: [binaries, extension]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --draft --title "Ixo ${GITHUB_REF_NAME#v}" \
+            --notes "Install: see the README (install.sh / install.ps1), or download a build below."

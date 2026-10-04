@@ -1,0 +1,2 @@
+par fn boom(x) = 1 / x
+print(boom(0).await)   # expect panic: in a par task: division by zero

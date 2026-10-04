@@ -1,0 +1,13 @@
+# many small objects kept alive, each with a string and a short list
+class Rec(id, name, score, tags)
+
+fn run(n)
+    recs = []
+    for i in 0..n -> recs.add(Rec(i, f"name{i}", i % 100, [i % 7, i % 11]))
+    total = 0
+    long_names = 0
+    for r in recs
+        total += r.score + r.tags[0] + r.tags[1]
+        if r.name.len > 9 -> long_names += 1
+    print(recs.len, total, long_names)
+run(300_000)

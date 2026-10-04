@@ -1,0 +1,7 @@
+fn run(n)
+    ps = []
+    for i in 0..n -> ps.add((i, i * 2))
+    s = 0
+    for (a, b) in ps -> s += a + b
+    print(ps.len, s)
+run(1_000_000)

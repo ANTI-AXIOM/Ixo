@@ -1,0 +1,3 @@
+fn f
+    defer
+        return 1   # expect error: can't be used inside a defer

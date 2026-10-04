@@ -1,0 +1,41 @@
+# Interfaces, enums, operator methods and defer working together.
+
+class Money(cents: int)
+    fn +(o) = Money(self.cents + o.cents)
+    fn -(o) = Money(self.cents - o.cents)
+    fn *(k) = Money((self.cents * k).round)
+    fn ==(o) = self.cents == o.cents
+    fn <(o) = self.cents < o.cents
+    fn str = f"${self.cents / 100:.2f}"
+
+interface Priced
+    fn price
+    fn label = f"{self.name}: {self.price}"
+
+class Item(name, unit: Money, qty: int) is Priced
+    fn price = self.unit * self.qty
+
+enum Discount
+    None
+    Percent(p)
+    Fixed(amount)
+    fn apply(total) = match self
+        Discount.Percent(p) -> total - total * (p / 100)
+        Discount.Fixed(amount) -> if amount < total -> total - amount else Money(0)
+        Discount.None -> total
+
+fn checkout(items: list[Priced], discount: Discount, log)
+    log.add("open register")
+    defer log.add("close register")
+    if items.len == 0 -> return Money(0)
+    total = items.map(_.price).fold(Money(0), _a + _b)
+    discount.apply(total)
+
+cart = [Item("tea", Money(450), 2), Item("cake", Money(325), 1)]
+for i in cart -> print(i.label)
+log = []
+print(checkout(cart, Discount.None, log))
+print(checkout(cart, Discount.Percent(10), log))
+print(checkout(cart, Discount.Fixed(Money(2000)), log))
+print(checkout([], Discount.None, log), log.len)
+print(cart.map(_.price).max, Money(100) == Money(100))

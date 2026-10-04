@@ -1,0 +1,1 @@
+use lib.nonexistent   # expect error: can't find module 'lib.nonexistent'

@@ -1,0 +1,13 @@
+r = 0..5
+print(r, r.len, r.list)               # expect: 0..<5 5 [0, 1, 2, 3, 4]
+print(1..=3, (1..=3).list)            # expect: 1..=3 [1, 2, 3]
+print(3 in 0..5, 5 in 0..5, 5 in 0..=5)  # expect: true false true
+print((0..10).step(3).list)          # expect: [0, 3, 6, 9]
+print(range(3).list, range(2, 5).list)  # expect: [0, 1, 2] [2, 3, 4]
+print((1..=5).sum, (1..=5).map(_ * 2))  # expect: 15 [2, 4, 6, 8, 10]
+print((10..0).list)                  # expect: []
+print((0..5)[2])                     # expect: 2
+print([10, 20, 30, 40][1..=2])        # expect: [20, 30]
+print("abcdef"[-3..-1])              # expect: de
+n = 4
+print((0..n).list)                    # expect: [0, 1, 2, 3]

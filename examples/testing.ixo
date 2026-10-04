@@ -1,0 +1,17 @@
+# Unit tests: run with  ixo test examples/testing.ixo
+
+fn slugify(s) = s.trim.down.replace(" ", "-")
+
+@test
+fn slugify_basic
+    assert_eq(slugify("  Hello World "), "hello-world")
+
+@test
+fn slugify_keeps_dashes
+    assert_eq(slugify("a-b c"), "a-b-c")
+
+@test
+fn errors_are_values
+    r = int("not a number")
+    assert(is_error(r), "int() should fail")
+    assert_eq(r.kind, "InvalidNumber")

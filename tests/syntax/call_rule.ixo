@@ -1,0 +1,29 @@
+# A function declared without parentheses is called wherever its name is used.
+fn version = "0.6"
+print(version, version.len)                 # expect: 0.6 3
+count = 0
+fn tick
+    count += 1
+tick
+tick
+print(count)                                # expect: 2
+# with parentheses, the name is the function; () calls it
+fn shout(s = "hey") = s.up
+f = shout
+print(f(), shout("a"), type(shout))         # expect: HEY A fn
+# &name is the function itself
+g = &version
+print(type(g), g())                         # expect: fn 0.6
+class Hero(hp)
+    fn alive = hp > 0
+    fn hit(d = 1)
+        hp -= d
+h = Hero(2)
+h.hit()
+print(h.alive, h.hp)                        # expect: true 1
+b = h.hit                                   # a bound method
+b(1)
+print(h.alive, type(&h.alive))              # expect: false fn
+# a function used as a method is always called: x.f is f(x)
+fn double(x) = x * 2
+print(5.double, 5.double.double)            # expect: 10 20

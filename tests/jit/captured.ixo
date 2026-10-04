@@ -1,0 +1,47 @@
+# Machine code for functions that use variables of an enclosing function:
+# every closure of the function sees its own variables.
+fn counter(start)
+    n = start
+    fn next()
+        n += 1
+        n
+    return &next
+a = counter(0)
+b = counter(100)
+for i in 0..5000
+    a()
+    b()
+print(a(), b())                      # expect: 5001 5101
+
+fn compose(f, g) = fn(x) = g(f(x))
+inc_double = compose(fn(x) = x + 1, fn(x) = x * 2)
+double_inc = compose(fn(x) = x * 2, fn(x) = x + 1)
+t = 0
+for i in 0..20000 -> t += inc_double(i) - double_inc(i)
+print(t)                             # expect: 20000
+
+# a shared variable written by one closure and read by another
+fn pair
+    total = 0
+    fn add(x)
+        total += x
+    fn get()
+        total
+    (&add, &get)
+fs = pair
+for i in 1..=1000 -> fs[0](i)
+print(fs[1]())                       # expect: 500500
+
+# strings and lists captured too
+fn collector
+    items = []
+    text = ""
+    fn take(x)
+        items.add(x)
+        text += str(x)
+        (items.len, text.len)
+    return &take
+c = collector
+last = (0, 0)
+for i in 0..300 -> last = c(i % 10)
+print(last)                          # expect: (300, 300)

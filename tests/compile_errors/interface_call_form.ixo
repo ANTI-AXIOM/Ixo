@@ -1,0 +1,4 @@
+interface Shape
+    fn area
+class Sq(s) is Shape
+    fn area() = s * s    # expect error: Sq.area must be written like Shape.area: fn area

@@ -1,0 +1,45 @@
+fn count_primes(lo, hi)
+    n = 0
+    for x in lo..hi
+        if x < 2 -> continue
+        prime = true
+        d = 2
+        while d * d <= x
+            if x % d == 0
+                prime = false
+                break
+            d += 1
+        if prime -> n += 1
+    n
+
+t = par count_primes(0, 10000)
+print(t.await)                                  # expect: 1229
+
+tasks = (0..8).map(par count_primes(_ * 1250, (_ + 1) * 1250))
+print(tasks.map(_.await).sum)                   # expect: 1229
+
+par fn square(x) = x * x
+print(square(7).await)                          # expect: 49
+
+factor = 3
+fn scale(x) = x * factor
+print((par scale(5)).await)                     # expect: 15
+
+class Point(x, y)
+    fn len = (self.x ** 2 + self.y ** 2).sqrt
+fn far(points) = points.keep(_.len > 2)
+r = (par far([Point(3, 4), Point(1, 1)])).await
+print(r.len, r[0].x, type(r[0]))                # expect: 1 3 Point
+m = match r[0]
+    Point(x, y) -> f"{x},{y}"
+    _ -> "?"
+print(m)                                        # expect: 3,4
+
+fn fails(x) = if x > 0 -> Error.Bad("nope") else x
+print((par fails(1)).await)                     # expect: Error.Bad: nope
+
+add = fn(a, b) = a + b
+print((par add(2, 3)).await)                    # expect: 5
+offset = 100
+bump = fn(x) = x + offset
+print((par [1, 2].map(bump)).await)             # expect: [101, 102]

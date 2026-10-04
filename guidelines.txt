@@ -10,7 +10,8 @@ Standard Library: Powerful default functions, with the ability to add libraries 
 Syntax
 
 Removing colons in statements
-Replacing the def keyword by func for function definitions
+Replacing the def keyword by fn for function definitions
+Optional parentheses for zero-argument functions/calls (e.g. `fn foo` or `item.len` vs `foo()`)
 Making types of functions implicit (if there's no return, it's a void, return int, it's an int ... etc ...)
 Simplifying simple arithmetic operations (e.g. x + y, x - y, etc.)
 
@@ -18,6 +19,18 @@ Type System
 
 Making types implicit, but allowing for explicit specification if needed
 Implementing type inference, which allows the language to infer the types of variables and function return values based on their usage
+
+**Universal Underscore (`_`)**:
+- `_` represents the single argument in a lambda (e.g. `list.map(_.name)`)
+- `_name` (e.g. `_x`, `_a`) auto-defines arguments for clearer or multi-arg lambdas
+- `_` variables are guaranteed temporary / zero-allocation
+
+**Expression Assignment**:
+- Control structures like `if` and `match` return values and can be assigned (e.g. `x = if cond -> 1 else -> 0`)
+
+**Program Structure**:
+- **Implicit Main**: Top-level code is executed immediately (script-style). No `fn main` required.
+- **Error Propagation (`?`)**: Suffix `?` to a call to immediately return any error to the caller (e.g. `file.read?`).
 We established that the type system would be a language feature, rather than a separate compiler flag or runtime option.
 
 Memory Management
@@ -32,6 +45,11 @@ Concurrency
 
 Providing a general-purpose API for concurrent programming, including synchronization primitives, task scheduling, and communication between tasks
 Focusing on safety and ease of use, while still providing high-performance concurrency capabilities
+
+**Modules & Exports**:
+- `use lib` imports all exported symbols (`*`) from `lib` into the current scope
+- `in lib use item` imports only specific items (optimized import)
+- Append `*` to names to export them (placed before return type, e.g. `fn calc(x)* -> int`)
 
 Standard Library
 

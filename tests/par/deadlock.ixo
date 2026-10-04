@@ -1,0 +1,4 @@
+ch = flow()
+par fn never(c) = c.recv
+t = never(ch)
+t.await   # expect panic: deadlock

@@ -1,0 +1,2 @@
+fn r(n) = r
+x = r | 0     # expect error: can't use '|' on fn(any) -> fn(any)

@@ -1,0 +1,3 @@
+x = error("bad input")?
+print("unreachable")
+# expect panic: unhandled error: Error: bad input

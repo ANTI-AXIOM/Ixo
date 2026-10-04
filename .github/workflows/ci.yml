@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: bash build.sh
+      - name: Tests
+        run: python3 tests/run.py
+      - name: Tools (LSP, DAP, REPL, JIT, docs, packages, build)
+        run: |
+          python3 tests/tools/lsp_smoke.py
+          python3 tests/tools/lsp_features.py
+          python3 tests/tools/dap_smoke.py
+          python3 tests/tools/repl_keys.py
+          python3 tests/tools/jit_check.py
+          python3 tests/tools/profile_check.py
+          python3 tests/tools/doc_check.py
+          python3 tests/tools/pkg_check.py
+          python3 tests/tools/build_check.py
+      - name: Fuzz (short)
+        run: |
+          python3 tests/tools/fuzz.py 300
+          python3 tests/tools/fuzz_run.py 200
+      - name: Debug build
+        run: bash build.sh debug
+
+  linux-arm64:
+    # ARM64: the AArch64 JIT backend
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: bash build.sh
+      - name: Tests
+        run: python3 tests/run.py
+      - name: JIT agrees with the interpreter
+        run: python3 tests/tools/jit_check.py
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: bash build.sh
+      - name: Tests
+        shell: pwsh
+        run: python tests/run.py
+      - name: Tools (LSP, DAP, JIT, docs, packages, build)
+        shell: pwsh
+        run: |
+          python tests/tools/lsp_smoke.py
+          python tests/tools/lsp_features.py
+          python tests/tools/dap_smoke.py
+          python tests/tools/jit_check.py
+          python tests/tools/profile_check.py
+          python tests/tools/doc_check.py
+          python tests/tools/pkg_check.py
+          python tests/tools/build_check.py
+      - name: Fuzz (short)
+        shell: pwsh
+        run: |
+          python tests/tools/fuzz.py 300
+          python tests/tools/fuzz_run.py 200
+
+  macos:
+    # Apple silicon: the AArch64 JIT backend (MAP_JIT pages)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: CXX=clang++ bash build.sh
+      - name: Tests
+        run: python3 tests/run.py
+      - name: Tools
+        run: |
+          python3 tests/tools/lsp_smoke.py
+          python3 tests/tools/dap_smoke.py
+          python3 tests/tools/repl_keys.py
+          python3 tests/tools/pkg_check.py
+          python3 tests/tools/build_check.py
+          python3 tests/tools/jit_check.py
+          python3 tests/tools/profile_check.py
+
+  vscode-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Package the extension
+        working-directory: editors/vscode
+        run: npx --yes @vscode/vsce package --out ixo-lang.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension
+          path: editors/vscode/ixo-lang.vsix
