@@ -1,0 +1,12 @@
+# whole-list sums, minimums, maximums and searches
+fn run(n)
+    xs = []
+    for i in 0..n -> xs.add(i * 7919 % 1_000_003)
+    fs = []
+    for i in 0..n -> fs.add(i * 0.5)
+    t = 0
+    for k in 0..20
+        t += xs.sum + xs.max - xs.min
+        if xs.has(-k) -> t += 1
+    print(t, fs.sum, xs.find(999_999))
+run(5_000_000)

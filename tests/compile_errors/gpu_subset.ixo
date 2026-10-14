@@ -1,0 +1,26 @@
+# What a gpu fn can't do is a compile error, with the reason.
+gpu fn untyped(x)                          # expect error: the parameters of a gpu fn need a type
+    x = 1
+gpu fn strings(out: buffer[int])
+    s = "hi"                               # expect error: a gpu fn can't use a str
+gpu fn lists(out: buffer[float])
+    xs = [1, 2]                            # expect error: a gpu fn can't make a list
+gpu fn calls(out: buffer[int])
+    out[0] = print(1)                      # expect error: a gpu fn can't call print
+gpu fn returns(out: buffer[int]): int      # expect error: a gpu fn returns nothing
+    out[0] = 1
+gpu fn mixed(out: buffer[int])
+    out[0] = 1.5                           # expect error: this buffer holds ints; the value is a float
+gpu fn retype(out: buffer[int])
+    v = 1.5
+    v = true                               # expect error: 'v' holds a float; this is a bool
+gpu fn outside(out: buffer[int])
+    out[0] = counter                       # expect error: a gpu fn can only use its parameters
+gpu fn steps(out: buffer[int], n: int)
+    for i in 0..10 by n                    # expect error: a gpu fn's loop step must be a constant
+        out[i] = i
+gpu fn wide(out: buffer[int])
+    out[0] = 5_000_000_000                 # expect error: gpu ints are 32-bit
+gpu fn maptype(m: map)                     # expect error: it takes int, float, bool, buffer[int] or buffer[float]
+    m = 1
+counter = 0

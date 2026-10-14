@@ -356,6 +356,7 @@ struct FnDecl : Stmt {
     bool exported = false;
     bool isFork = false;         // fork fn: every call starts a task
     bool isPar = false;          // par fn: every call starts a parallel task
+    bool isGpu = false;          // gpu fn: a kernel; every call launches it (see gpu.hpp)
     bool isLambda = false;
     bool isMethod = false;       // defined in a class body (implicit self)
     bool lenientArity = false;   // placeholder lambdas ignore extra arguments

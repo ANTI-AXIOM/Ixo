@@ -1,0 +1,64 @@
+# Lists of only ints, only floats or only bools are stored packed; mixing kinds
+# must behave exactly as before (every value keeps its own type).
+ints: list = []
+for i in 0..20000 -> ints.add(i)
+print(ints.len, ints.sum, ints[-1])           # expect: 20000 199990000 19999
+ints.add(1.0)                                 # an int list meets a float: plain values from now on
+print(ints[-1], ints[-2], ints.len)           # expect: 1.0 19999 20001
+print(ints[-1] == 1, type(ints[-1]), type(ints[0]))  # expect: true float int
+
+fl: list = [0.5, -0.0, 2.0]
+print(fl, fl[1])                              # expect: [0.5, -0.0, 2.0] -0.0
+fl[0] = 1                                     # an int into a float list keeps being an int
+print(fl, type(fl[0]))                        # expect: [1, -0.0, 2.0] int
+nan = 0.0 / 0.0
+fs = [nan, 1.5]
+print(fs[0] == fs[0], fs[1])                  # expect: false 1.5
+
+bs: list = [true, false, true]
+bs.add(false)
+print(bs, bs.len)                             # expect: [true, false, true, false] 4
+bs[0] = nil
+print(bs)                                     # expect: [nil, false, true, false]
+
+mixed = [1, "a", 2.5, true, nil]
+print(mixed)                                  # expect: [1, "a", 2.5, true, nil]
+
+# hot loops over packed lists (machine code once they run often)
+fn total(xs)
+    t = 0
+    for x in xs -> t += x
+    t
+fn stamp(xs)
+    for i in 0..xs.len -> xs[i] = xs[i] * 2
+    xs
+f = []
+for i in 0..5000 -> f.add(i * 0.5)
+n = []
+for i in 0..5000 -> n.add(i)
+for k in 0..20
+    total(f)
+    total(n)
+print(total(f), total(n))                     # expect: 6248750.0 12497500
+print(stamp([1, 2, 3]), stamp([0.5, 1.5]))    # expect: [2, 4, 6] [1.0, 3.0]
+w: list = [1, 2, 3]
+w[1] = "two"                                  # a string into an int list
+print(w, total([1, 2]) + total([1.5]))        # expect: [1, "two", 3] 4.5
+
+# sorting, copying and the list helpers on packed kinds
+s: list = [5, 3, 9, 1]
+s.sort!
+print(s, [3.5, -1.0, 2.0].sort, [3, 1.5, 2].sort)  # expect: [1, 3, 5, 9] [-1.0, 2.0, 3.5] [1.5, 2, 3]
+print(s.rev, s.copy, s.slice(1, 3), s.find(9), s.has(4))  # expect: [9, 5, 3, 1] [1, 3, 5, 9] [3, 5] 3 false
+s.insert(0, 0)
+print(s.drop(1), s.remove(9), s.take, s)      # expect: 1 true 5 [0, 3]
+s.wipe
+s.add("x")
+print(s, [1, 2] + [3.0], [7] * 3, [1, 2] == [1.0, 2.0])  # expect: ["x"] [1, 2, 3.0] [7, 7, 7] true
+e = []
+print(e, e.len, e.is_empty, e.get(0))         # expect: [] 0 true nil
+for x in [] -> print(x)
+it = 0
+for b in [true, true, false]
+    if b -> it += 1
+print(it)                                     # expect: 2

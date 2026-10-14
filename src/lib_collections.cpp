@@ -3,20 +3,30 @@
 #include <cmath>
 
 #include "builtins.hpp"
+#include "simd.hpp"
 
 namespace ixo {
 
 #define NATIVE(name) static Value name([[maybe_unused]] VM& vm, [[maybe_unused]] Value* a, [[maybe_unused]] int n)
 
-static std::vector<Value>& L(Value v) { return as<ObjList>(v)->items; }
+static ObjList* L(Value v) { return as<ObjList>(v); }
+static SeqView V(Value v) { return SeqView(*as<ObjList>(v)); }
+// Edits a list as plain values, then stores the result back at its narrowest kind.
+template <class F> static auto editList(Value v, F&& f) {
+    auto* l = L(v);
+    std::vector<Value> items = V(v).vec();
+    auto r = f(items);
+    l->adopt(std::move(items));
+    return r;
+}
 
 // Collects any iterable into a vector (list, tuple, str, set, map keys, range).
 static std::vector<Value> toVector(VM& vm, Value v, const char* fname) {
     std::vector<Value> out;
     if (!v.isObj()) vm.panic(std::string(fname) + "() expected something to loop over, got " + vm.typeName(v));
     switch (v.o->type) {
-        case OT::List: return as<ObjList>(v)->items;
-        case OT::Tuple: return as<ObjTuple>(v)->items;
+        case OT::List: return V(v).vec();
+        case OT::Tuple: return SeqView(as<ObjTuple>(v)->items).vec();
         case OT::Set:
             for (auto& x : as<ObjSet>(v)->items)
                 if (!x.isUndef()) out.push_back(x);
@@ -62,12 +72,10 @@ NATIVE(c_map) {
     auto* m = vm.alloc<ObjMap>();
     if (n > 0) {
         for (auto& p : toVector(vm, a[0], "map")) {
-            std::vector<Value>* kv = nullptr;
-            if (isObjType(p, OT::Tuple)) kv = &as<ObjTuple>(p)->items;
-            if (isObjType(p, OT::List)) kv = &as<ObjList>(p)->items;
-            if (!kv || kv->size() != 2) vm.panic("map() expects a list of (key, value) pairs");
-            requireHashable(vm, (*kv)[0]);
-            m->set((*kv)[0], (*kv)[1]);
+            SeqView kv;
+            if (!seqOf(p, kv) || kv.size() != 2) vm.panic("map() expects a list of (key, value) pairs");
+            requireHashable(vm, kv[0]);
+            m->set(kv[0], kv[1]);
         }
     }
     return Value::object(m);
@@ -85,8 +93,11 @@ NATIVE(n_len) {
     Value v = a[0];
     if (!v.isObj()) vm.panic("len() of a " + vm.typeName(v));
     switch (v.o->type) {
-        case OT::String: return Value::integer((int64_t)utf8Length(as<ObjString>(v)->s));
-        case OT::List: return Value::integer((int64_t)L(v).size());
+        case OT::String: {
+            auto* s = as<ObjString>(v);
+            return Value::integer((int64_t)(VM::ascii(s) ? s->s.size() : utf8Length(s->s)));
+        }
+        case OT::List: return Value::integer((int64_t)L(v)->len());
         case OT::Tuple: return Value::integer((int64_t)as<ObjTuple>(v)->items.size());
         case OT::Map: return Value::integer((int64_t)as<ObjMap>(v)->live);
         case OT::Set: return Value::integer((int64_t)as<ObjSet>(v)->live);
@@ -104,6 +115,12 @@ NATIVE(n_zip) {
     return vm.newList(std::move(out));
 }
 NATIVE(n_sum) {
+    if (isObjType(a[0], OT::List)) {  // packed numbers: no boxing, and SIMD for ints
+        auto* l = as<ObjList>(a[0]);
+        if (l->lk() == LK_INTS) return Value::integer(simdSumInts(l->ints.data(), l->ints.size()));
+        if (l->lk() == LK_FLOATS) return Value::number(simdSumFloats(l->floats.data(), l->floats.size()));
+        if (l->lk() == LK_EMPTY) return Value::integer(0);
+    }
     auto items = toVector(vm, a[0], "sum");
     Value acc = Value::integer(0);
     bool allInt = true;
@@ -123,73 +140,82 @@ NATIVE(n_sum) {
 
 // ------------------------------------------------------------------ list
 
-NATIVE(l_len) { return Value::integer((int64_t)L(a[0]).size()); }
+NATIVE(l_len) { return Value::integer((int64_t)L(a[0])->len()); }
 NATIVE(l_add) {
-    L(a[0]).push_back(a[1]);
+    auto* l = L(a[0]);
+    size_t before = l->elemSize();
+    l->push(a[1]);
     // keep the list's own size in step so freeing it gives the bytes back
-    vm.grow(a[0].o, sizeof(Value));
+    size_t after = l->elemSize();
+    vm.grow(l, after + (after > before ? (l->len() - 1) * (after - before) : 0));
     return a[0];
 }
 // After removing items: a list far below its room gives the rest back.
 static void shrinkSparse(std::vector<Value>& v) {
     if (v.capacity() > 64 && v.size() * 4 < v.capacity()) v.shrink_to_fit();
 }
+static void shrinkSparse(ObjList* l) {
+    if (l->capacity() > 64 && l->len() * 4 < l->capacity()) l->shrinkToFit();
+}
 
 NATIVE(l_take) {
-    auto& v = L(a[0]);
-    if (v.empty()) return Value();
-    Value x = v.back();
-    v.pop_back();
-    shrinkSparse(v);
+    auto* l = L(a[0]);
+    if (!l->len()) return Value();
+    Value x = l->pop();
+    shrinkSparse(l);
     return x;
 }
 NATIVE(l_get) {
-    auto& v = L(a[0]);
+    auto* l = L(a[0]);
     if (!a[1].isNum()) vm.panic("list.get() needs an int index");
     int64_t i = vm.argInt(a, 1, "get");
-    if (i < 0) i += (int64_t)v.size();
-    if (i < 0 || i >= (int64_t)v.size()) return n > 2 ? a[2] : Value();
-    return v[(size_t)i];
+    if (i < 0) i += (int64_t)l->len();
+    if (i < 0 || i >= (int64_t)l->len()) return n > 2 ? a[2] : Value();
+    return l->get((size_t)i);
 }
 NATIVE(l_set) {
-    auto& v = L(a[0]);
+    auto* l = L(a[0]);
     int64_t i = vm.argInt(a, 1, "set");
-    if (i < 0) i += (int64_t)v.size();
-    if (i < 0 || i >= (int64_t)v.size())
-        vm.panic("index " + std::to_string(i) + " is out of range for a list of length " + std::to_string(v.size()));
-    v[(size_t)i] = a[2];
+    if (i < 0) i += (int64_t)l->len();
+    if (i < 0 || i >= (int64_t)l->len())
+        vm.panic("index " + std::to_string(i) + " is out of range for a list of length " + std::to_string(l->len()));
+    l->set((size_t)i, a[2]);
     return Value();
 }
 NATIVE(l_insert) {
-    auto& v = L(a[0]);
     int64_t i = vm.argInt(a, 1, "insert");
-    if (i < 0) i += (int64_t)v.size() + 1;
-    i = std::clamp<int64_t>(i, 0, (int64_t)v.size());
-    v.insert(v.begin() + i, a[2]);
-    return Value();
+    Value x = a[2];
+    return editList(a[0], [&](std::vector<Value>& v) {
+        if (i < 0) i += (int64_t)v.size() + 1;
+        i = std::clamp<int64_t>(i, 0, (int64_t)v.size());
+        v.insert(v.begin() + i, x);
+        return Value();
+    });
 }
 NATIVE(l_drop) {
-    auto& v = L(a[0]);
     int64_t i = vm.argInt(a, 1, "drop");
-    if (i < 0) i += (int64_t)v.size();
-    if (i < 0 || i >= (int64_t)v.size()) return Value();
-    Value x = v[(size_t)i];
-    v.erase(v.begin() + i);
-    shrinkSparse(v);
-    return x;
+    return editList(a[0], [&](std::vector<Value>& v) {
+        if (i < 0) i += (int64_t)v.size();
+        if (i < 0 || i >= (int64_t)v.size()) return Value();
+        Value x = v[(size_t)i];
+        v.erase(v.begin() + i);
+        shrinkSparse(v);
+        return x;
+    });
 }
 NATIVE(l_remove) {
-    auto& v = L(a[0]);
-    for (size_t i = 0; i < v.size(); i++)
-        if (vm.equals(v[i], a[1])) {
-            v.erase(v.begin() + i);
-            shrinkSparse(v);
-            return Value::boolean(true);
-        }
+    auto* l = L(a[0]);
+    for (size_t i = 0; i < l->len(); i++)
+        if (vm.equals(l->get(i), a[1]))
+            return editList(a[0], [&](std::vector<Value>& v) {
+                v.erase(v.begin() + i);
+                shrinkSparse(v);
+                return Value::boolean(true);
+            });
     return Value::boolean(false);
 }
 NATIVE(l_wipe) {
-    std::vector<Value>().swap(L(a[0]));  // and its memory
+    L(a[0])->clear();  // and its memory
     return Value();
 }
 
@@ -254,9 +280,33 @@ static void sortValues(VM& vm, std::vector<Value>& items, Value cmp) {
     });
 }
 
+// Sorting a list of only ints (or only floats without NaN) needs no compare callbacks.
+static bool sortTypedInPlace(ObjList* l) {
+    if (l->lk() == LK_INTS) {
+        std::sort(l->ints.begin(), l->ints.end());
+        return true;
+    }
+    if (l->lk() == LK_FLOATS) {
+        for (double d : l->floats)
+            if (d != d) return false;
+        std::stable_sort(l->floats.begin(), l->floats.end());
+        return true;
+    }
+    return false;
+}
+static bool sortedTyped(VM& vm, Value src, Value& out) {
+    if (!isObjType(src, OT::List) || !L(src)->typed() || L(src)->lk() == LK_BOOLS) return false;
+    Value copy = vm.newList(V(src).vec());
+    if (!sortTypedInPlace(L(copy))) return false;
+    out = copy;
+    return true;
+}
 NATIVE(l_sort) {
     Value cmp = n > 1 ? a[1] : Value();
-    std::vector<Value> items = isObjType(a[0], OT::List) ? L(a[0]) : toVector(vm, a[0], "sort");
+    if (n < 2 || a[1].isNil()) {
+        if (Value fast; sortedTyped(vm, a[0], fast)) return fast;
+    }
+    std::vector<Value> items = toVector(vm, a[0], "sort");
     sortValues(vm, items, cmp);
     return vm.newList(std::move(items));
 }
@@ -265,21 +315,51 @@ NATIVE(l_sort) {
 NATIVE(l_sort_inplace) {
     Value list = a[0];
     Value cmp = n > 1 ? a[1] : Value();
-    std::vector<Value> items = L(list);
+    if (cmp.isNil() && sortTypedInPlace(L(list))) return list;
+    std::vector<Value> items = V(list).vec();
     sortValues(vm, items, cmp);
-    L(list) = std::move(items);
+    L(list)->adopt(std::move(items));
     return list;
 }
+// sort_by(_.age): the field of each instance, without calling the lambda (false: call it)
+static bool fieldKeys(Value keyFn, const std::vector<Value>& items, std::vector<Value>& keys) {
+    if (!isObjType(keyFn, OT::Closure) || as<ObjClosure>(keyFn)->fn->keyField < 0) return false;
+    int sym = as<ObjClosure>(keyFn)->fn->keyField;
+    ObjClass* last = nullptr;
+    int at = -1;
+    keys.resize(items.size());
+    for (size_t i = 0; i < items.size(); i++) {
+        if (!isObjType(items[i], OT::Instance)) return false;
+        auto* inst = as<ObjInstance>(items[i]);
+        if (inst->cls != last) {  // (a method or getter of that name: the lambda decides)
+            auto it = inst->cls->fieldIndex.find(sym);
+            if (it == inst->cls->fieldIndex.end()) return false;
+            last = inst->cls;
+            at = it->second;
+        }
+        keys[i] = inst->fields[(size_t)at];
+    }
+    return true;
+}
 NATIVE(l_sort_by) {
-    std::vector<Value> items = isObjType(a[0], OT::List) ? L(a[0]) : toVector(vm, a[0], "sort_by");
+    std::vector<Value> items = toVector(vm, a[0], "sort_by");
     Value keyFn = a[1];
-    std::vector<std::pair<Value, Value>> keyed;
-    for (auto& x : items) keyed.push_back({vm.callNested(keyFn, &x, 1), x});
-    std::vector<Value> idx;
-    for (size_t i = 0; i < keyed.size(); i++) idx.push_back(Value::integer((int64_t)i));
-    mergeSort(idx, [&](const Value& p, const Value& q) { return vm.compare(keyed[p.i].first, keyed[q.i].first) < 0; });
+    std::vector<Value> keys;
+    if (!fieldKeys(keyFn, items, keys)) {
+        keys.clear();
+        for (auto& x : items) keys.push_back(vm.callNested(keyFn, &x, 1));
+    }
+    std::vector<uint32_t> idx(items.size());
+    for (size_t i = 0; i < idx.size(); i++) idx[i] = (uint32_t)i;
+    bool ints = true;
+    for (auto& k : keys) ints &= k.t == VT::Int;
+    if (ints)  // (stable, as mergeSort: the same order)
+        std::stable_sort(idx.begin(), idx.end(), [&](uint32_t p, uint32_t q) { return keys[p].i < keys[q].i; });
+    else
+        std::stable_sort(idx.begin(), idx.end(), [&](uint32_t p, uint32_t q) { return vm.compare(keys[p], keys[q]) < 0; });
     std::vector<Value> out;
-    for (auto& i : idx) out.push_back(keyed[i.i].second);
+    out.reserve(idx.size());
+    for (auto i : idx) out.push_back(items[i]);
     return vm.newList(std::move(out));
 }
 NATIVE(l_rev) {
@@ -288,7 +368,13 @@ NATIVE(l_rev) {
     return vm.newList(std::move(items));
 }
 NATIVE(l_rev_inplace) {
-    std::reverse(L(a[0]).begin(), L(a[0]).end());
+    auto* l = L(a[0]);
+    switch (l->lk()) {
+        case LK_BOOLS: std::reverse(l->bools.begin(), l->bools.end()); break;
+        case LK_INTS: std::reverse(l->ints.begin(), l->ints.end()); break;
+        case LK_FLOATS: std::reverse(l->floats.begin(), l->floats.end()); break;
+        default: std::reverse(l->vals.begin(), l->vals.end()); break;
+    }
     return a[0];
 }
 NATIVE(l_first) {
@@ -299,21 +385,49 @@ NATIVE(l_last) {
     auto items = toVector(vm, a[0], "last");
     return items.empty() ? Value() : items.back();
 }
-NATIVE(l_is_empty) { return Value::boolean(L(a[0]).empty()); }
+NATIVE(l_is_empty) { return Value::boolean(L(a[0])->len() == 0); }
+// The position of the first item equal to x in a packed list (len() when there's
+// none), with == as VM::equals has it; -1: not a packed list, look the slow way.
+static int64_t findPacked(ObjList* l, Value x) {
+    switch (l->lk()) {
+        case LK_INTS:
+            if (x.t == VT::Int) return (int64_t)simdFindInt(l->ints.data(), l->ints.size(), x.i);
+            if (x.t == VT::Float) {  // an int equals a float when it converts to it
+                for (size_t i = 0; i < l->ints.size(); i++)
+                    if ((double)l->ints[i] == x.f) return (int64_t)i;
+                return (int64_t)l->ints.size();
+            }
+            return (int64_t)l->ints.size();
+        case LK_FLOATS:
+            if (x.isNum()) return (int64_t)simdFindFloat(l->floats.data(), l->floats.size(), x.num());
+            return (int64_t)l->floats.size();
+        case LK_BOOLS:
+            if (x.t == VT::Bool)
+                for (size_t i = 0; i < l->bools.size(); i++)
+                    if ((l->bools[i] != 0) == x.b) return (int64_t)i;
+            return (int64_t)l->bools.size();
+        case LK_EMPTY: return 0;
+        default: return -1;
+    }
+}
 NATIVE(l_has) {
-    for (auto& x : L(a[0]))
+    int64_t at = findPacked(L(a[0]), a[1]);
+    if (at >= 0) return Value::boolean((size_t)at < L(a[0])->len());
+    for (Value x : V(a[0]))
         if (vm.equals(x, a[1])) return Value::boolean(true);
     return Value::boolean(false);
 }
 NATIVE(l_find) {
-    auto& v = L(a[0]);
-    for (size_t i = 0; i < v.size(); i++)
-        if (vm.equals(v[i], a[1])) return Value::integer((int64_t)i);
+    auto* l = L(a[0]);
+    int64_t at = findPacked(l, a[1]);
+    if (at >= 0) return (size_t)at < l->len() ? Value::integer(at) : Value();
+    for (size_t i = 0; i < l->len(); i++)
+        if (vm.equals(l->get(i), a[1])) return Value::integer((int64_t)i);
     return Value();
 }
-NATIVE(l_copy) { return vm.newList(L(a[0])); }
+NATIVE(l_copy) { return vm.newList(V(a[0]).vec()); }
 NATIVE(l_slice) {
-    auto& v = L(a[0]);
+    SeqView v = V(a[0]);
     int64_t len = (int64_t)v.size();
     int64_t lo = vm.argInt(a, 1, "slice");
     int64_t hi = n > 2 ? vm.argInt(a, 2, "slice") : len;
@@ -333,7 +447,34 @@ NATIVE(l_join) {
     }
     return vm.vstr(out);
 }
+// min and max of a packed list of ints; floats without NaN (else: as compare() does it)
+static bool packedMinMax(Value v, bool max, Value& out) {
+    if (!isObjType(v, OT::List)) return false;
+    auto* l = as<ObjList>(v);
+    if (l->lk() == LK_INTS && !l->ints.empty()) {
+        out = Value::integer(max ? simdMaxInts(l->ints.data(), l->ints.size()) : simdMinInts(l->ints.data(), l->ints.size()));
+        return true;
+    }
+    if (l->lk() == LK_FLOATS && !l->floats.empty()) {
+        double best = l->floats[0];
+        for (double d : l->floats) {
+            if (d != d) return false;
+            if (max ? d > best : d < best) best = d;
+        }
+        out = Value::number(best);
+        return true;
+    }
+    return false;
+}
+NATIVE(l_sum_fast) {
+    if (isObjType(a[0], OT::List) && as<ObjList>(a[0])->lk() == LK_FLOATS) {
+        auto* l = as<ObjList>(a[0]);
+        return Value::number(simdSumFloatsFast(l->floats.data(), l->floats.size()));
+    }
+    return n_sum(vm, a, n);
+}
 NATIVE(l_min) {
+    if (Value r; packedMinMax(a[0], false, r)) return r;
     auto items = toVector(vm, a[0], "min");
     if (items.empty()) return Value();
     Value best = items[0];
@@ -342,6 +483,7 @@ NATIVE(l_min) {
     return best;
 }
 NATIVE(l_max) {
+    if (Value r; packedMinMax(a[0], true, r)) return r;
     auto items = toVector(vm, a[0], "max");
     if (items.empty()) return Value();
     Value best = items[0];
@@ -562,6 +704,8 @@ void registerCollections(VM& vm) {
     vm.defineMethod(T_, "min", l_min, 0, 0, "fn() -> T?", "Smallest item.");
     vm.defineMethod(T_, "max", l_max, 0, 0, "fn() -> T?", "Largest item.");
     vm.defineMethod(T_, "sum", n_sum, 0, 0, "fn() -> num", "Sum of the items.");
+    vm.defineMethod(T_, "sum_fast", l_sum_fast, 0, 0, "fn() -> num",
+                    "Sum of the items, floats added in any order (faster; the last digits may differ from sum).");
     vm.defineMethod(T_, "prod", l_prod, 0, 0, "fn() -> num", "Product of the items.");
     vm.defineMethod(T_, "uniq", l_uniq, 0, 0, "fn() -> list[T]", "Copy without duplicates (first occurrence kept).");
     vm.defineMethod(T_, "flat", l_flat, 0, 0, "fn() -> list", "Flattens one level of nested lists.");

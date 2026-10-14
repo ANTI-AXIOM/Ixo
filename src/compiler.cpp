@@ -1,4 +1,5 @@
 #include "compiler.hpp"
+#include "gpu.hpp"
 
 #include "checker.hpp"
 #include "jit.hpp"
@@ -561,12 +562,49 @@ ObjFunction* Compiler::compileFunction(FnDecl* fnd, const std::string& qualName)
             }
         }
     }
+    // sort_by(_.age): a key that is one field of the argument
+    if (fnd->isLambda && fnd->params.size() == 1 && !fnd->params[0].type && fnd->body && fnd->body->stmts.size() == 1 &&
+        fnd->body->stmts[0]->kind == NK::ExprStmt) {
+        Expr* e = static_cast<ExprStmt*>(fnd->body->stmts[0].get())->expr.get();
+        if (e->kind == NK::Member && !static_cast<Member*>(e)->isCall) {
+            auto* mem = static_cast<Member*>(e);
+            Expr* o = mem->object.get();
+            if (o->kind == NK::Ident && static_cast<Ident*>(o)->decl && static_cast<Ident*>(o)->decl == fnd->params[0].decl)
+                fn->keyField = vm.sym(mem->name);
+        }
+    }
     if (std::find(fnd->attrs.begin(), fnd->attrs.end(), "$nojit") != fnd->attrs.end()) fn->noJit = true;
     if (info) {
         for (Decl* h : info->hoisted) {
             emitOp(OP_UNDEF, +1);
             bindSlot(st, h, st.depth - 1);
         }
+    }
+    if (fnd->isGpu) {
+        // a gpu fn: its kernel is checked and made now; its body here just launches it
+        std::string err;
+        int el = 0, ec = 0;
+        int kid = gpuCompile(fnd, err, el, ec);
+        if (kid < 0) error(SrcPos{el ? el : fnd->pos.line, el ? ec : fnd->pos.col}, "gpu fn " + fnd->name + ": " + err);
+        fn->gpuKernel = kid;
+        emitOp(OP_GET_BUILTIN, +1);
+        emitU16((uint16_t)vm.builtinIndex("__gpu_launch"));
+        emitOp(OP_CONST, +1);
+        emitU16(constant(Value::integer(kid)));
+        int argc = 0;
+        for (size_t i = firstParam; i < fnd->params.size(); i++) {
+            emitOp(OP_GET_LOCAL, +1);
+            emitU16((uint16_t)(fnd->params[i].decl ? st.slotOf[fnd->params[i].decl] : 0));
+            argc++;
+        }
+        emitOp(OP_CALL, -(argc + 1));
+        emitByte((uint8_t)(argc + 1));
+        emitOp(OP_RETURN, -1);
+        fn->upvalueCount = (int)st.upvals.size();
+        fs = st.enclosing;
+        line = savedLine;
+        emitClosure(fn, st);
+        return fn;
     }
     // default arguments and runtime checks of annotated parameters
     for (size_t i = firstParam; i < fnd->params.size(); i++) {

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <queue>
 #include <new>
 #include <functional>
 #include <memory>
@@ -48,7 +49,11 @@ struct Fiber {
     double wakeAt = 0;
     int startArgc = -1;  // >= 0: first run calls stack[0] with this many arguments
     int nativeDepth = 0;
-    int jitDepth = 16;  // nested machine-code calls its stack has room for (grows when reached)
+    size_t index = 0;        // its position in VM::fibers (removal in O(1))
+    uint32_t queued = 0;     // times it is in the run queue
+    uint64_t sleepGen = 0;   // bumped when it starts or stops sleeping (stale heap entries)
+    bool asleep = false;
+    int jitDepth = 2;   // nested machine-code calls its stack has room for (grows x4 when reached)
     bool isMain = false;
     uint64_t serial = 0;  // unique id, used to find the fiber from other threads
     std::shared_ptr<World> world;  // par tasks: module snapshot (null: the real modules)
@@ -88,18 +93,29 @@ struct StackEntry {
     int line;
 };
 
+struct WarmProfile {
+    std::unordered_map<uint64_t, std::vector<std::pair<uint32_t, int>>> fns;  // key -> loop entry points
+    std::string savePath;  // empty: read-only (a built executable)
+    uint64_t hits = 0;
+};
+uint64_t warmKey(const ObjFunction* fn);
+// The JIT's thresholds: a function compiles after this many calls, a loop after
+// this many turns (the counter is shared: calls and turns both add one).
+constexpr uint32_t kJitCalls = 200, kJitTurns = 2000;
+int runCacheCommand(const std::vector<std::string>& args);
+
 class VM {
 public:
     VM();
     ~VM();
 
     // ---------------------------------------------------------- memory
-    // Small objects come from free lists of 16-byte size classes (no malloc
+    // Small objects come from free lists of 8-byte size classes (no malloc
     // for most allocations); bigger ones from malloc.
     // The pools are also how the collector finds every object: it walks each
     // chunk slot by slot (every slot starts with a header saying its size).
     struct ObjPool {
-        static constexpr size_t kGrain = 16, kClasses = 32, kChunk = 256 * 1024;
+        static constexpr size_t kGrain = 8, kClasses = 64, kChunk = 256 * 1024;
         void* freeList[kClasses + 1] = {};  // empty slots: type Free, the next one at offset 8
         char* bump = nullptr;
         char* bumpEnd = nullptr;
@@ -201,6 +217,14 @@ public:
         o->sizeClass = c;
         return track(o, sizeof(T));
     }
+    ObjTuple* newTupleN(size_t n) {  // n nils, to fill in
+        size_t bytes = sizeof(ObjTuple) + n * sizeof(Value);
+        uint8_t c;
+        void* mem = rawAlloc(bytes, c);
+        auto* t = tupleInit(mem, n);
+        t->sizeClass = c;
+        return track(t, bytes);
+    }
     ObjInstance* newInstance(ObjClass* cls) {
         size_t n = cls->fields.size();
         size_t bytes = sizeof(ObjInstance) + n * sizeof(Value);
@@ -296,6 +320,13 @@ public:
     // Calls a function from native code (sort comparators, str()); the callee
     // may not block on flows or tasks.
     Value callNested(Value callee, const Value* args, int argc);
+    // a task that has already finished with this result (gpu launches: they run in order)
+    ObjTask* finishedTask(Value result = Value()) {
+        auto* t = alloc<ObjTask>(nextTaskId++);
+        t->done = true;
+        t->result = result;
+        return t;
+    }
     // Runs one @test function in a fresh task; returns an error message or "".
     std::string runTest(Value fn);
     [[noreturn]] void panic(const std::string& msg);
@@ -372,6 +403,25 @@ public:
     int jitStep(JitCtx& ctx, Value* frameBase, JitOpSite& s);
     int jitFastOp(JitCtx& ctx, Value* frameBase, JitOpSite& s);  // common ones directly, else jitStep
     void strAppend(Value& local, Value x, bool plainAdd, uint8_t owner);  // STR_APPEND(_G): owner 1 / 2
+    // Is this string ASCII? Computed once and remembered in its header.
+    static bool ascii(const ObjString* s) {
+        if (!s->kind) s->kind = isAsciiText(s->s) ? 1 : 2;
+        return s->kind == 1;
+    }
+    static bool isAsciiText(const std::string& s) {
+        for (unsigned char c : s)
+            if (c >= 0x80) return false;
+        return true;
+    }
+    // The shared one-character string for an ASCII byte (no allocation per character).
+    Value charStr(unsigned char c) {
+        if (!asciiChars[c]) {
+            asciiChars[c] = str(std::string(1, (char)c));
+            asciiChars[c]->kind = 1;
+        }
+        return Value::object(asciiChars[c]);
+    }
+    ObjString* asciiChars[128] = {};
     // A module variable's value is being read: a string it grew in place is now shared.
     static Value sealed(Value v) {
         if (v.t == VT::Obj && v.o->type == OT::String && static_cast<ObjString*>(v.o)->appendable)
@@ -395,6 +445,12 @@ public:
         if (f == stepFiber && f->frames.size() >= stepFrames) throw JitStepAbort{};
     }
     std::exception_ptr jitPanic;  // a panic inside a helper, raised once the frames are back
+    // Warm start (warm.cpp): functions that got hot in earlier runs compile at
+    // after a few calls. warmApply looks a function up once and lowers its threshold.
+    std::shared_ptr<struct WarmProfile> warm;
+    void warmLoad(const std::string& mainPath);
+    void warmApply(ObjFunction* fn);
+    void warmSave();
     // IXO_JIT_STATS=1: where machine code hands over to the interpreter, and why.
     struct JitStats* jitStats = nullptr;
     void noteJitGiveUp(ObjFunction* fn, const char* what);  // calls or loops stay interpreted now
@@ -405,6 +461,13 @@ public:
     // Compiles when hot; true if compiled and usable here. A loop header (seedAt,
     // seedDepth) not yet in the code is added as an entry point (recompiling).
     bool jitReady(Fiber* f, ObjClosure* c, int64_t seedAt = -1, int seedDepth = 0);
+    // Typed machine code whose guesses keep failing: compiled again the plain way.
+    void jitDemote(ObjFunction* fn, ObjClosure* c);
+    static void jitAllowDirect(ObjFunction* fn) {
+        fn->jitDirect = fn->jitState == 2 && fn->jit && !fn->isFork && !fn->isPar &&
+                        !(fn->upvalueCount > 0 && fn->methodStyle);
+    }
+    bool jitShouldDemote(const ObjFunction* fn) const;
     ParRuntime* par = nullptr;
     std::deque<Message> inbox;  // guarded by par->m
     bool idle = false;          // guarded by par->m
@@ -431,7 +494,32 @@ private:
     friend struct GcAccess;
 
     std::vector<Fiber*> fibers;          // all live fibers
-    std::vector<Fiber*> sleepers;
+    // Sleeping tasks: a min-heap by wake-up time. Entries name the fiber by serial and
+    // generation, so a woken or finished fiber's old entries are simply skipped.
+    struct SleepEntry {
+        double at;
+        uint64_t serial, gen;
+        bool operator>(const SleepEntry& o) const { return at > o.at; }
+    };
+    std::priority_queue<SleepEntry, std::vector<SleepEntry>, std::greater<SleepEntry>> sleepHeap;
+    size_t sleeping = 0;
+    void sleepAdd(Fiber* f) {
+        f->sleepGen++;
+        f->asleep = true;
+        sleeping++;
+        sleepHeap.push({f->wakeAt, f->serial, f->sleepGen});
+    }
+    void sleepRemove(Fiber* f) {
+        if (!f->asleep) return;
+        f->asleep = false;
+        f->sleepGen++;
+        sleeping--;
+    }
+    Fiber* sleepTop();  // the next fiber to wake (dropping stale entries), or null
+    void enqueue(Fiber* f) {
+        f->queued++;
+        runQueue.push_back(f);
+    }
     Fiber* mainFiber = nullptr;
     Value mainResult;
     bool startingTask = false;

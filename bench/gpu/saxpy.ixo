@@ -1,0 +1,20 @@
+# y = a * x + y over 16M floats
+gpu fn saxpy(a: float, x: buffer[float], y: buffer[float])
+    i = gpu.index
+    y[i] = a * x[i] + y[i]
+
+gpu fn init(x: buffer[float], y: buffer[float])
+    i = gpu.index
+    x[i] = float(i % 1000)
+    y[i] = 1.0
+
+n = 16_000_000
+x = gpu.floats(n)
+y = gpu.floats(n)
+init(x, y)
+saxpy(0.5, x, y)
+t0 = clock()
+for r in 0..10 -> saxpy(0.5, x, y)
+t = (clock() - t0) / 10
+print(y[999], y[n - 1])
+print(f"time {t}")

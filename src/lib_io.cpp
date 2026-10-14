@@ -7,10 +7,12 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 
 #include "builtins.hpp"
 #include "json.hpp"
+#include "simd.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -180,7 +182,7 @@ NATIVE(fs_write) { return writeFile(vm, vm.argStr(a, 0, "fs.write")->s, vm.toStr
 NATIVE(fs_append) { return writeFile(vm, vm.argStr(a, 0, "fs.append")->s, vm.toStr(a[1]), true); }
 NATIVE(fs_write_bytes) {
     std::string data;
-    for (auto& v : vm.argList(a, 1, "fs.write_bytes")->items) {
+    for (Value v : SeqView(*vm.argList(a, 1, "fs.write_bytes"))) {
         if (!v.isInt() || v.i < 0 || v.i > 255) vm.panic("fs.write_bytes() expects ints from 0 to 255");
         data += (char)v.i;
     }
@@ -260,7 +262,7 @@ NATIVE(os_run) {
         argv = {"/bin/sh", "-c", as<ObjString>(a[0])->s};
 #endif
     } else {
-        for (auto& v : vm.argList(a, 0, "os.run")->items) argv.push_back(vm.toStr(v));
+        for (Value v : SeqView(*vm.argList(a, 0, "os.run"))) argv.push_back(vm.toStr(v));
     }
     if (argv.empty()) vm.panic("os.run() needs a command");
     std::string input = n > 1 ? vm.toStr(a[1]) : "";
@@ -269,6 +271,15 @@ NATIVE(os_run) {
     flushOut();
     if (!runProcess(argv, input, out, code)) return vm.newError("NotFound", "can't run '" + argv[0] + "'");
     return vm.newTuple({Value::integer(code), vm.vstr(out)});
+}
+NATIVE(os_cpu) {  // what the JIT and the list operations use
+    const CpuInfo& c = cpuInfo();
+    auto* m = vm.alloc<ObjMap>();
+    Value keep = Value::object(m);
+    m->set(vm.vstr("arch"), vm.vstr(c.arch));
+    m->set(vm.vstr("simd"), vm.vstr(c.simd()));
+    m->set(vm.vstr("cores"), Value::integer((int64_t)std::max(1u, std::thread::hardware_concurrency())));
+    return keep;
 }
 NATIVE(os_platform) {
 #ifdef _WIN32
@@ -574,7 +585,7 @@ void jsonWrite(VM& vm, Value v, std::string& o, int indent, int level, int depth
         o += '[';
         bool first = true;
         for (auto it = begin; it != end; ++it) {
-            if (it->isUndef()) continue;
+            if ((*it).isUndef()) continue;
             if (!first) o += ',';
             first = false;
             nl(level + 1);
@@ -597,7 +608,7 @@ void jsonWrite(VM& vm, Value v, std::string& o, int indent, int level, int depth
     };
     switch (v.o->type) {
         case OT::String: jsonQuote(o, as<ObjString>(v)->s); return;
-        case OT::List: array(as<ObjList>(v)->items.begin(), as<ObjList>(v)->items.end()); return;
+        case OT::List: { SeqView sv(*as<ObjList>(v)); array(sv.begin(), sv.end()); return; }
         case OT::Tuple: array(as<ObjTuple>(v)->items.begin(), as<ObjTuple>(v)->items.end()); return;
         case OT::Set: array(as<ObjSet>(v)->items.begin(), as<ObjSet>(v)->items.end()); return;
         case OT::Map: {
@@ -696,6 +707,8 @@ void registerIO(VM& vm) {
     vm.nsFunc(os, "run", os_run, 1, 2, "fn(any, str?) -> (int, str) ! Error",
               "Runs a command (a string for the shell, or a list of arguments); returns (exit_code, output).");
     vm.nsFunc(os, "platform", os_platform, 0, 0, "fn() -> str", "\"windows\", \"linux\" or \"macos\".");
+    vm.nsFunc(os, "cpu", os_cpu, 0, 0, "fn() -> map[str, any]",
+              "The processor: {arch, simd (the widest vector instructions used), cores}.");
     Value argsList = vm.newList();
     vm.nsValue(os, "args", argsList, "list[str]", "Command-line arguments after the script name.");
     vm.defineBuiltin("args", argsList, "list[str]", "Command-line arguments after the script name.");

@@ -729,7 +729,7 @@ Object sizes measured with `sizeof`, against CPython 3.14 (`sys.getsizeof`):
   (objects 201 → 128 MB). A young generation or reference counting remains as discussed
   in Phase 8.
 
-## Phase 10: typed containers (planned, not started)
+## Phase 10: typed containers (done)
 
 Goal: lists and instance fields that hold only numbers or bools take 1–8 bytes per item
 instead of 16, without changing what any program means. This is the step that takes
@@ -811,33 +811,51 @@ Classes learn each field's representation, as V8 does for object fields:
 
 Each step ships with all tests, the JIT check and GC stress passing.
 
-1. [ ] `ObjList` gets the kind byte, the union storage and the three levels. Every current
-   use goes through `items()`: no behavior or memory change yet.
-2. [ ] Kinds on: creation paths (literals, `[x] * n`, ranges, `map`/`keep`, JSON, `cut`)
-   and the interpreter's `GET_INDEX`/`SET_INDEX`/`LIST_APPEND`/`SEQ_INIT`/`FOR_SEQ`.
-   A new test file covers every widening rule and that values read back exactly
-   (ints stay ints, `1` vs `1.0`, `nil`, `-0.0`, NaN).
-3. [ ] Read-only natives on `view()`; hot ones (`add`, `len`, `get`, `has`, `sum`, `sort`,
-   `slice`, `join`) on typed fast paths.
-4. [ ] JIT paths per kind; the collector skips typed lists; `par`, `freeze`, `ixo build`
-   and the debugger use `view()`.
-5. [ ] Measure 4-byte ints and bit-packed bools on intlist and sieve; keep what pays.
-6. [ ] Typed instance fields, if objects is still above Python.
+1. [x] `ObjList` gets the kind byte, the union storage and the three levels (`get`/`set`/
+   `push`/`len`, `SeqView` for read-only access to lists and tuples, `items()` widening).
+2. [x] Kinds on creation (`newList` picks the narrowest kind, `[]` starts `empty`,
+   `[x] * n` copies packed storage directly) and in the interpreter (`LIST_APPEND`,
+   `FOR_SEQ`, iterators, indexing). `tests/collections/typed_lists.ixo` covers the
+   widening rules, `1` vs `1.0`, `nil`, `-0.0`, NaN and hot loops.
+3. [x] Read-only natives on `SeqView`; `add`, `len`, `get`, `set`, `take`, `has`, `find`,
+   `slice`, `copy`, `rev!` on typed paths; `sort` of an int list (or a float list without
+   NaN) sorts raw numbers. Editing natives (`insert`, `drop`, `remove`, `sort!`) work on
+   values and store the result back at its narrowest kind.
+4. [x] JIT paths per kind (indexing, `.len`, inline `add`, `for x in xs`); the collector
+   skips typed lists; `par`, `freeze`, JSON, CSV, the debugger and printing read through
+   `SeqView`, so none of them widen a list.
+5. [x] Evaluated 4-byte ints and bit-packed bools. Not done: intlist is already at C++'s
+   memory (70.4 MB against 68.1) and sieve's bools take 2 MB of its 8.4 (bits would save
+   1.75 MB), while both would add a kind and a slower element access to every JIT path.
+6. [x] Objects: instead of typed fields, two layout changes that help every object. The
+   pools use 8-byte size classes (were 16), and instances and tuples keep their item
+   count in the 4 header bytes alignment used to waste: a 2-field instance takes 56
+   bytes (was 64), a pair 48 (was 64). Above 64 MB live, the collector runs when the
+   heap has grown by a third (was a half). Typed instance fields move to Phase 12, where
+   type profiles and guards make a field's representation a natural thing to specialize.
 
-Estimates (from Phase 9's measurements):
+Results (Windows, best of 3–5):
 
-| workload | now    | with typed lists | Python | C++  |
-|----------|-------:|-----------------:|-------:|-----:|
-| sieve    | 37 MB  | about 5 MB       | 25     | 3.8  |
-| intlist  | 134 MB | about 70 MB (about 40 with 4-byte ints) | 236 | 68 |
-| floats   | 38 MB  | about 22 MB      | 98     | 20   |
+| workload | before: s / MB | after: s / MB | Python: s / MB | C++: s / MB |
+|----------|---------------:|--------------:|---------------:|------------:|
+| sieve    | 0.157 / 38.3   | 0.057 / 8.4   | 0.328 / 25.0   | 0.018 / 3.8 |
+| intlist  | 0.231 / 134.6  | 0.110 / 70.4  | 1.068 / 234.1  | 0.064 / 68.1 |
+| floats   | 0.247 / 38.7   | 0.200 / 22.5  | 0.478 / 97.4   | 0.036 / 20.1 |
+| sort     | -     / 34.4   | 0.189 / 34.4  | 0.781 / 56.4   | 0.105 / 14.4 |
+| objects  | 0.311 / 127.8  | 0.315 / 105.2 | 1.003 / 110.5  | 0.140 / 26.6 |
+| tuples probe | 0.232 / 89.0 | 0.296 / 74.5 | 0.330 / 141.5 | - |
+
+- Peak memory is now at most Python's on every workload except format (10.3 MB against
+  9.8) and strmap (70.6 against 70.2), which are level.
+- sieve, intlist and floats are within 1.12× C++'s memory. sieve and intlist are within
+  3.2× and 1.7× its time.
 
 Targets:
 - Peak memory at most Python's on every workload.
 - sieve, intlist and floats within 1.5× C++.
 - No workload slower; big scans and collections faster.
 
-## Phase 11: runtime efficiency (proposed, not started)
+## Phase 11: runtime efficiency (done)
 
 A search for more problems like Phase 10's: costs that come from how data is represented
 and handled rather than from the code a program runs. Each probe below runs in Ixo and
@@ -861,7 +879,7 @@ minute each until item 1 is done).
 The last three are fine: closures and int maps already use half Python's memory, and
 regular expressions are on par. The rest, worst first:
 
-1. [ ] **Strings know they are ASCII.**
+1. [x] **Strings know they are ASCII.**
    - Today `.len`, `s[i]` and `s.slice(a, b)` scan the whole string, to count UTF-8
      characters and check for non-ASCII bytes, on every call. Loops over a string by
      position are therefore quadratic: 1900× slower than Python for `s[i]`, 500× for
@@ -876,7 +894,7 @@ regular expressions are on par. The rest, worst first:
      A table of the 128 ASCII one-character strings, made once, removes those
      allocations (Python does the same).
    - Target: both probes on par with Python.
-2. [ ] **The scheduler scales.**
+2. [x] **The scheduler scales.**
    - Sleeping tasks are kept in a vector, scanned in full at every turn to find the next
      wake-up time and the tasks due, and each woken task is removed by another linear
      search. The fiber list and run queue are searched the same way when a task ends.
@@ -887,13 +905,13 @@ regular expressions are on par. The rest, worst first:
      storage: about 5 KB per task against Python's 1.8 KB. Start stacks at 32 slots
      (512 bytes) and grow on demand, as they already can.
    - Target: 100k tasks at or below Python in time and memory.
-3. [ ] **`par` workers stop counting toward compilation.**
+3. [x] **`par` workers stop counting toward compilation.**
    - Workers never compile, but their loops still increment the hotness counters of the
      functions they share with the main program. Four threads writing one cache line
      cancel the parallel speedup (0.074 s with the JIT on, 0.033 s with it off). It's
      also a data race.
    - Fix: worker VMs skip all JIT bookkeeping.
-4. [ ] **Tuples store their items inline.**
+4. [x] **Tuples store their items inline.**
    - A tuple keeps its items in a separate `std::vector`: a second allocation and about
      40 extra bytes per tuple.
    - Tuples never change size, so the items can follow the object, as instance fields
@@ -901,12 +919,29 @@ regular expressions are on par. The rest, worst first:
    - Expected: 1M pairs from 121 MB to about 80 MB, one allocation instead of two, faster
      than Python. Pairs are everywhere: `zip`, `indexed`, map `pairs`, multiple return
      values.
-5. [ ] **Machine code shares pages.**
+5. [x] **Machine code shares pages.**
    - Each compiled function gets its own executable allocation: at least one 4 KB page,
      and a 64 KB address reservation on Windows. That's about 5.7 KB per function
      (300 functions: 1.7 MB).
    - Fix: a code arena that packs functions into shared pages, for about 0.5–1 KB per
      function. Large programs with thousands of hot functions save megabytes.
+
+Results after the five fixes (same machines and runs as the table above):
+
+| probe        | before: s / MB  | after: s / MB | Python: s / MB |
+|--------------|----------------:|--------------:|---------------:|
+| strindex     | 67.812 / 9.5    | 0.033 / 6.7   | 0.045 / 9.9    |
+| slices       | 61.292 / 45.6   | 0.090 / 39.0  | 0.156 / 45.4   |
+| tasks (10k)  | 0.193 / 56.5    | 0.109 / 22.8  | 0.585 / 35.5   |
+| tasks100k    | 6.430 / 501.1   | 0.307 / 165.0 | 2.397 / 175.7  |
+| partasks     | 0.074 / 10.7    | 0.049 / 10.5  | 0.687 / 19.1   |
+| tuples       | 0.290 / 121.0   | 0.296 / 74.5  | 0.330 / 141.5  |
+| manyfns (MB) | 10.2            | 9.4           | -              |
+
+- Small task stacks keep two frames' worth of slots for machine code (`Fiber::jitDepth`),
+  so 100k tasks use 165 MB, not 510.
+- `IXO_JIT_LOG` prints each compile's time and why a function stayed interpreted;
+  `IXO_JIT_STATS` adds the total compile count and time (Phase 15's first step).
 
 Not problems:
 - Measured: regex (compiled patterns are cached), closures and int-keyed maps (half
@@ -917,7 +952,7 @@ Not problems:
 Suggested order: 1, 2 and 3 first (each is small, and 1 and 2 fix quadratic behavior),
 then 4 and 5. They are independent of Phase 10 and can go before or after it.
 
-## Phase 12: typed native code (proposed, not started)
+## Phase 12: typed native code (mostly done: see "What was built")
 
 Goal: code whose types are known runs as plain machine code, with no tags, no type checks
 and numbers in registers: parity with C++ on scalar code. Today nbody is 11× C++ and
@@ -980,24 +1015,72 @@ offset.
 
 ### Steps
 
-1. [ ] Type profiles in the interpreter and tier 1 (cheap counters per operation), shown by
-   `IXO_JIT_STATS`.
-2. [ ] Typed IR from bytecode plus types; a printer for it (`IXO_JIT_IR=1`) and tests that
-   run every bench program through it.
-3. [ ] Unboxing, guards and exits with frame rebuilding. A stress mode that fails every
-   guard (`IXO_JIT_DEOPT_STRESS`) runs the whole test suite.
-4. [ ] Linear-scan register allocation on both CPUs.
-5. [ ] Inlining, check elimination, bounds-check elimination, escape analysis, code
-   motion, each measured on its own.
-6. [ ] Background compilation for tier 2: see Phase 15, which owns when and where code is
-   compiled.
+1. [x] Type profiles, in the interpreter only (tier 1 doesn't count anything). Each
+   instruction whose result type the code doesn't fix (fields, items, calls, module and
+   captured variables, loop items) records the kinds it produced, in a byte at the offset
+   of the instruction after it; parameters get one byte each. Indexing also records "the
+   container wasn't a list". `IXO_JIT_STATS` counts typed compiles and demotions.
+2. [x] Types per slot and instruction, computed over the bytecode (a dataflow pass,
+   `inferTypes`), rather than a separate SSA IR: ints, floats, bools, nil, "some value"
+   and "maybe unset". Loops compiled before the interpreter ever ran them have no
+   profile: the first time machine code reaches one, it hands it to the interpreter
+   once, which learns its types, and the function is compiled again. No IR printer:
+   `IXO_JIT_DUMP=dir` writes the machine code instead (`objdump -D -b binary`).
+3. [x] Unboxing, guards and exits. Typed values live in registers between
+   instructions; memory is brought up to date where control flow joins, before
+   anything the interpreter might see and on every exit (each exit writes back exactly
+   the registers that differ from memory at that point). A guess that turns out wrong
+   hands over to the interpreter and is counted; after 64 (and 1 in 16 calls) the
+   function is compiled again without guesses. `IXO_JIT_DEOPT_STRESS=1` makes every
+   guess fail and runs the whole suite that way, on x86-64 and ARM64.
+4. [x] Register allocation, not linear scan: a per-instruction allocator over 8 general
+   and 12 float registers (least recently used goes first), copies of variables that
+   share their register until the variable changes, and "homes": each innermost loop
+   keeps its busiest typed variables (counters, sums, bounds) in fixed registers across
+   iterations. Every way into one of the loop's join points brings them there; code
+   arriving with everything in memory enters through a small loading stub. A dry first
+   compile finds which callee-saved registers are used, so only those are saved.
+5. [ ] Of the optimizations:
+   - [x] Check elimination for objects: a variable once checked to be an instance of
+     class C keeps its pointer in a register, unchecked, until it changes. Frozen is
+     checked once per variable too.
+   - [x] Division and modulo by a constant: a multiplication and shifts (verified on
+     76 million cases against floor semantics).
+   - [x] Typed lists in loops: `for x in xs`, `xs[i]`, `xs[i] = v`, `xs.add(v)` read and
+     write the packed storage directly; `s += x` on numbers adds in registers.
+   - [x] Direct calls: machine code calls a closure's machine code without a helper;
+     captured variables are read in machine code.
+   - [ ] Inlining, bounds-check elimination, escape analysis, loop-invariant code
+     motion: not done. fib and callbacks are what they would help most.
+6. [ ] Background compilation for tier 2: see Phase 15. Tier-2 compiles take 0.1–1 ms
+   (two passes); not yet needed.
+
+### What was built: results
+
+`IXO_JIT_TIER2=0` turns the typed tier off. Times on the same machine, best of 3 or 5,
+including start-up (Ixo's is about 0.01 s); the machine was noisy, so ±15%:
+
+| workload | tier 1 | tier 2 | C++ | Python | tier 2 / C++ |
+|----------|-------:|-------:|----:|-------:|-------------:|
+| loops    | 0.074  | 0.029  | 0.020 | 1.24 | 1.4× |
+| nbody    | 0.227  | 0.056–0.064 | 0.030 | 1.23 | 2.1× |
+| floats   | 0.150  | 0.049–0.065 | 0.034 | 0.44 | 1.4–1.9× |
+| sieve    | 0.042  | 0.026–0.033 | 0.022 | 0.28 | 1.2–1.5× |
+| intlist  | 0.082  | 0.066–0.076 | 0.051 | 0.98 | 1.3–1.5× |
+| fib      | 0.026  | 0.023–0.026 | 0.011 | 0.16 | 2.4× |
+| callbacks | 0.166 | 0.087–0.097 | 0.023 | 0.97 | 3.8× |
+
+- Every test passes in every mode (typed, tier 1 only, every guess failing, GC stress)
+  on Windows x86-64, Linux x86-64 and ARM64 (qemu); the JIT check agrees on every program.
+- Building it found an old ARM64 bug: tier 1's floor modulo tested the flags of an `eor`,
+  which sets none on AArch64 (now fixed and tested).
 
 Targets:
 - nbody, loops and fib within 1.5× C++, sieve and floats within 2× (with typed lists).
 - No program slower than tier 1.
 - Tier-2 compiles under 1 ms each.
 
-## Phase 13: beyond C++ (proposed, not started)
+## Phase 13: beyond C++ (in progress: steps 2, 3 and 6 done in part)
 
 Goal: be faster than typical C++ where Ixo's rules give the compiler facts C++ can't
 promise, as Fortran (no overlapping arrays), ISPC (vectorized by default) and Julia
@@ -1060,23 +1143,52 @@ promise, as Fortran (no overlapping arrays), ISPC (vectorized by default) and Ju
 
 ### Steps
 
-1. [ ] Alias facts in the typed IR (unique, frozen, typed-list ownership), with a run-time
-   check where they can't be proven.
-2. [ ] SIMD code generation for typed-list loops and reductions; `vec`/`mat` on SIMD
-   registers.
-3. [ ] CPU feature detection and per-machine code.
-4. [ ] Guarded constant and callback specialization.
-5. [ ] Purity inference in the checker; automatic parallel `map`/`each`/`fold`;
-   `par for`.
-6. [ ] A benchmark set against idiomatic C++ (`std::function` callbacks, `std::sort`
-   with lambdas, loops over `std::vector`, `std::unordered_map`) in `bench/langs`.
+1. [ ] Alias facts: not done. The typed tier reads packed list storage directly, but
+   doesn't yet reorder or vectorize loops, which is what alias facts would allow.
+2. [x] (in part) SIMD for whole-list operations on packed lists (`src/simd.cpp`): `sum` of
+   ints, `min`, `max`, `has`, `find`, and `sum_fast` for floats (several partial sums;
+   `sum` keeps the program's order, so its result is exactly a loop's). AVX2 or SSE4.2 on
+   x86-64, NEON on ARM64, plain loops elsewhere; `IXO_SIMD=none|sse4.2` forces narrower
+   versions, and the suite passes with each. SIMD code generated by the JIT for loops:
+   not done.
+3. [x] CPU features are detected once (`os.cpu` shows `{arch, simd, cores}`); the list
+   operations pick their version from it. The JIT doesn't use AVX yet.
+4. [ ] (in part) Specialization: `sort_by(_.field)` reads the field without calling the
+   lambda (the compiler marks such lambdas), and int keys sort without boxing; comparators
+   like `sort(_a.age < _b.age)` already worked that way. Guarded inlining of callbacks:
+   not done (it needs Phase 12's inlining).
+5. [ ] Purity and automatic `par`: not done. `par` workers run in the interpreter (each
+   has its own heap; sharing the main heap's machine code would race on its counters),
+   so splitting a JIT-compiled `map` across workers would be slower, not faster, until
+   workers can run machine code of their own.
+6. [x] A benchmark set against idiomatic C++, in `bench/langs`: `callbacks`
+   (`std::function`), `sortby` (`std::stable_sort` with a lambda), `hashmap`
+   (`std::unordered_map`), `reduce` (`<numeric>`/`<algorithm>`).
+
+Building the benchmark set found that maps with int keys were slow: their index mixed
+keys with a multiplication, so even consecutive keys landed in random slots and every
+lookup missed the cache (112–297 ns in plain C++). The index now works like Python's
+dict: an int is its own hash and probing mixes in the high bits, so patterned keys
+still spread (`tests/collections/map_keys.ixo`): 5–27 ns.
+
+| workload  | before | now   | C++   | Python | now / C++ |
+|-----------|-------:|------:|------:|-------:|----------:|
+| reduce    | 3.71   | 0.446 | 0.841 | 5.22   | 0.5× (faster) |
+| strmap    | 0.243  | 0.286 | 0.426 | 0.39   | 0.7× (faster) |
+| sortby    | 0.218  | 0.104–0.113 | 0.118 | 0.23 | 0.9–1.0× |
+| hashmap   | 0.289  | 0.157 | 0.062 | 0.49   | 2.5× |
+| format    | 0.328  | 0.306 | 0.243 | 0.41   | 1.3× |
+| callbacks | 0.166  | 0.087 | 0.023 | 0.97   | 3.8× |
+
+C++ here is built with `-O2` for the baseline CPU, as a shipped binary usually is: that is
+why `reduce` loses (no AVX2), and the point of steps 2–3.
 
 Targets:
 - Faster than idiomatic C++ on the new benchmark set and on today's `strmap`/`format`.
 - Within 1.2× of hand-tuned C++ on loops, sieve and floats.
 - Never different results.
 
-## Phase 14: GPU compute (proposed, not started)
+## Phase 14: GPU compute (in progress: steps 1–4 and 7 done)
 
 Goal: write GPU code in Ixo itself: kernels in a restricted Ixo, data in typed device
 buffers, launched like tasks. Data-parallel work (arrays, images, physics, simulation,
@@ -1151,17 +1263,47 @@ result = y.list                        # back to the CPU
 
 ### Steps
 
-1. [ ] The `gpu fn` subset in the checker, with clear errors; the CPU fallback runs
-   kernels, so every GPU test also runs where there is no GPU (and in CI).
-2. [ ] Buffers, uploads and downloads, launches as tasks: the runtime API, first on the
-   CPU fallback.
-3. [ ] SPIR-V generation and the Vulkan runtime: device, buffers, pipelines, queues.
-   Kernels: saxpy, reductions, matrix multiply, image blur, nbody.
-4. [ ] WGSL generation and WebGPU in the playground.
-5. [ ] Shared memory, barriers, 2D/3D launches; `vec`/`mat` in kernels.
-6. [ ] `unsafe gpu` raw addresses and `ffi` interop; PTX as an optional backend.
-7. [ ] `bench/gpu`: the same kernels in Ixo-GPU, Ixo-CPU, C++ (CPU, and CUDA where
-   available).
+1. [x] The `gpu fn` subset (`src/gpu.cpp`): checked when the kernel is compiled, with an
+   error that says what isn't allowed (`tests/compile_errors/gpu_subset.ixo`). Parameters
+   are typed `int`, `float`, `bool`, `buffer[int]`, `buffer[float]`; on the device, ints and
+   floats are 32-bit (as in WGSL), and `//` and `%` floor as everywhere in Ixo. The kernel
+   becomes a small typed tree that every backend takes. `gpu` is a word only before `fn`
+   (it stays usable as a name).
+2. [x] Buffers (`gpu.floats`, `gpu.ints`, `gpu.buffer`; `.len`, `.list`, `.upload`, `[i]`,
+   `.free`) live in memory the device maps, so the CPU reads and writes them in place. A
+   call launches one thread per item of the first buffer (`gpu.launch(n, f, ...)` for an
+   explicit count) and gives a finished task: launches run in order. Indexing outside a
+   buffer stops the program with the index and the buffer's name. The CPU fallback runs the
+   kernel as register code on all cores, with the same results (`IXO_GPU=cpu`).
+3. [x] SPIR-V generation (`src/spirv.cpp`, written from the specification: no SDK) and a
+   Vulkan runtime (`src/vk.cpp`: the loader opened at run time, the few structures compute
+   needs declared from the specification). Tested on an Intel UHD (Windows) and Mesa's
+   lavapipe (Linux). Kernels: saxpy, Mandelbrot, matrix multiply, ints and floored division,
+   loops with break/continue, math (`tests/gpu/kernels.ixo`, run on the GPU and on the CPU).
+4. [x] (in part) WGSL generation (`gpu.wgsl(kernel)`), checked in a real WebGPU:
+   `tests/tools/wgsl_check.mjs` runs five kernels in headless Chrome and compares with
+   Ixo's own results. Running kernels from the browser playground: not done (the
+   playground's interpreter would need to wait for WebGPU, which is asynchronous).
+5. [ ] Shared memory, barriers, 2D/3D launches; `vec`/`mat` in kernels: not done. (Launches
+   past 65535 work groups already use a second dimension internally.)
+6. [ ] `unsafe gpu`, `ffi` interop and PTX: not done.
+7. [x] `bench/gpu`: Mandelbrot, saxpy and a matrix multiply, on the GPU, on the CPU fallback,
+   as plain Ixo and as C++ (`-O2`, one core). On an Intel UHD Graphics (integrated):
+
+| workload | GPU | CPU fallback (8 threads) | plain Ixo (JIT) | C++ |
+|----------|----:|-------------------------:|----------------:|----:|
+| Mandelbrot 1024×768, 256 iterations | 0.004–0.007 s | 0.79 | 0.40 | 0.17 |
+| saxpy, 16M floats | 0.014 | 0.12 | 0.15 | 0.013–0.016 |
+| matrix multiply 512×512 | 0.010 | 1.69 | 4.9 | 0.061 |
+
+- The GPU is 25–40× faster than one C++ core on Mandelbrot and 6× on the matrix multiply;
+  saxpy is bound by memory, which an integrated GPU shares with the CPU.
+- The CPU fallback interprets register code. It is about 8× faster than the first version,
+  which walked the tree, but still slower than plain Ixo for Mandelbrot: compiling kernels
+  to machine code for the CPU (with Phase 12's code generator) is the next step there.
+- Results: the CPU fallback matches C++'s 32-bit floats exactly. GPUs round some float
+  operations differently (fused multiply-adds), so a few pixels of a Mandelbrot edge differ,
+  as they do between any two devices; ints are exact everywhere.
 
 Targets:
 - Kernels within 1.5× of hand-written CUDA/GLSL equivalents.
@@ -1175,7 +1317,7 @@ independent and can go at any time. Phase 15 can start before 12 (warm start and
 thresholds work with today's JIT); its background compilation and tier policy pay off
 with 12's second tier.
 
-## Phase 15: automatic compilation (proposed, not started)
+## Phase 15: automatic compilation (in progress: steps 1–3 done, 4–5 wait for Phase 12)
 
 Goal: hot code gets compiled at the right time, at the right tier, without pausing the
 program and without the programmer ever writing a hint. Work done in an earlier run is
@@ -1277,23 +1419,229 @@ and the guide says when it still helps (a one-off measurement with no profile ye
 
 ### Steps
 
-1. [ ] Visibility first: compile times and reasons in `IXO_JIT_LOG`/`IXO_JIT_STATS`, so
-   every later step is measured.
-2. [ ] Adaptive thresholds and loop-entry compilation, on today's JIT.
-3. [ ] Warm start: profile format, save at exit, compile ahead at start-up, `ixo build
-   --train`, `ixo cache clean`. Tested with edited sources (stale entries ignored) and
-   concurrent runs (atomic file replace).
-4. [ ] The compiler thread with pinning, snapshots and installation at safe points; a
-   stress mode that compiles everything in the background at random delays, run over the
-   whole suite.
-5. [ ] Promotion and demotion between tiers (with Phase 12), and freeing discarded code
-   (with Phase 11's code arena).
+1. [x] Visibility first: `IXO_JIT_LOG` prints each compile's time and reason (called
+   often, a hot loop, `$jit`, called from machine code); `IXO_JIT_STATS` adds the number
+   of compiles and their total time.
+2. [x] Adaptive thresholds, measured and not adopted. A sweep of call/loop thresholds
+   (50/500, 100/1000, 200/500, 200/2000, 500/2000, 1000/5000) over `bench/langs`,
+   `bench/probes/manyfns` and the test suite found every setting within noise (bench
+   2.32–2.39 s in total). Compiling is cheap and both thresholds are low, so the
+   interpreted calls before compiling cost almost nothing. The thresholds stay fixed
+   (`kJitCalls` = 200, `kJitTurns` = 2000, in `vm.hpp`), and so does decay, which had no
+   measured case to fix.
+   - What did matter was compile cost itself. Installing each function flipped page
+     protection twice, which cost more than compiling a small function. The code arena
+     is now mapped twice (a writable view and an executable view of the same memory:
+     `CreateFileMapping` on Windows, `memfd` on Linux, with the old path as fallback).
+     300 small functions compile in 6.2 ms instead of 16.7, and manyfns runs in 0.041 s
+     with the JIT instead of 0.051 (0.039 without it).
+3. [x] Warm start (`src/warm.cpp`), opt-in with `IXO_JIT_CACHE=1`:
+   - At exit, each compiled function is saved with its loop entry points, keyed by a
+     hash of its name and bytecode, so moved projects and bundled executables still
+     match and edited functions are ignored.
+   - The profile lives in `.ixo-cache/` at the project root, else the user's cache
+     folder, one file per main file. Files are written privately and renamed into
+     place, so concurrent runs never see half a profile. At most 256 profiles are kept,
+     the least recently used go first. `ixo cache clean` empties the cache.
+   - A known function compiles after 8 calls, its loops after 16 turns. Compiling at the
+     very first call was tried and made closures, objects and format 8–9% slower: the
+     code was generated before the inline caches had seen any types.
+   - Measured: no gain on any workload (−3% to +2%, cold against warm, best of 7).
+     That's why it is off by default. It is kept for Phase 12's tier 2, whose compiles
+     cost more. `ixo build --train` waits for the same reason.
+   - Verified: the JIT check agrees on all 155 programs on a cold and a warm run, and
+     the test suite passes warm.
+4. [ ] The compiler thread, with Phase 12's tier 2. Today's compiles take a median of
+   157 µs and at most 1.1 ms (bench and examples), so the 0.1 ms target needs it, but
+   only tier 2 makes it worth the synchronization: snapshots of inline caches, pinning
+   and installation at safe points.
+5. [ ] Promotion and demotion between tiers (with Phase 12), and freeing discarded code.
 
 Targets:
 - No pause over 0.1 ms on the program's thread for compiling.
 - A warm second run of a short program (`bench/probes/manyfns`, the examples) at least
   20% faster than its first run.
 - No program slower than today; never a different result.
+
+## Phase 16: code less, do more (proposed, after Phases 10–15)
+
+Goal: rework how Ixo is written and typed so that a program of a few hundred lines, a few
+thousand words, is:
+- **shorter than Python**;
+- **as safe as Rust**: the mistakes Rust rejects are rejected or impossible;
+- **close to C++ in speed** for the parts that matter;
+- **more capable than Python across machines**: the same source on x86-64, ARM64, the
+  browser and GPUs, using all cores.
+
+This phase comes last on purpose. The speed it promises comes from Phases 10–15 (typed
+containers, typed native code, beyond-C++ optimizations, GPU, automatic compilation), and
+the language should be reshaped knowing what those need from it.
+
+### How "code less, do more" is measured
+
+Promises like this drift unless they are counted. Before any change, build the yardstick:
+
+- **`bench/rosetta`: about 25 everyday tasks**, each written idiomatically in Ixo, Python,
+  Rust and C++:
+  - text processing: word frequencies, log parsing, templating;
+  - data: CSV and JSON transforms, grouping, joins;
+  - algorithms: graph search, dynamic programming, priority queues;
+  - numbers: simulation (nbody), image filters, matrix code;
+  - concurrency: an HTTP service, a crawler with a task pool, a pipeline over flows;
+  - parallel work: map-reduce over cores, a GPU kernel (Phase 14);
+  - modelling: classes, interfaces and enums for a small domain;
+  - error-heavy I/O: reading files and settings with every failure handled;
+  - a command-line tool with arguments and output formatting.
+- **Measured for every task and language:**
+  - lines, words and tokens (counted the same way for all four);
+  - time and peak memory (`bench/langs` methods);
+  - a safety sheet: which planted mistakes the language rejects before running. Mistakes
+    planted: a missing nil check, an ignored error, a race on shared data, a use after
+    free, an index out of range, a missing `match` case, a forgotten close.
+- The suite runs in CI and its table is published in the docs, so every syntax proposal
+  in this phase is judged by numbers, not taste.
+
+### 1. Types without writing them
+
+- **Inference across whole functions and modules.** Local types, return types, generic
+  parameters and field types are inferred from use, not only from literals and
+  annotations. Annotations become documentation, optional everywhere except on exported
+  functions of a package, where they are part of the contract (and inferred ones can be
+  written in by `ixo fmt --annotate`).
+- **Strict and gradual modes:**
+  - **Strict** (a setting in `ixo.toml`, or `$strict` at the top of a file): every
+    expression has a static type, `any` must be written explicitly, and the safety rules
+    below are errors. Strict code is what Phases 12–14 compile to typed machine code,
+    SIMD and GPU, with no hints at all.
+  - **Gradual** (today's behavior): stays the default for scripts and the REPL.
+  - A strict module can use gradual ones through checked boundaries.
+- **Numbers:** `int` and `float` stay; sized types (`i32`, `u8`, `f32`) exist for typed
+  lists, GPU buffers and FFI, inferred where a value flows into them.
+
+### 2. Data that says what it is
+
+- **`data` declarations: immutable records in one line.**
+  - Example: `data Point(x: float, y: float)`.
+  - Equality, hashing, printing, copying with changes (`p.with(x = 3.0)`) and pattern
+    matching come built in.
+  - Being values, never shared mutably, they give Phase 13 its no-aliasing guarantee
+    and Phase 14 its GPU structs. Classes stay for objects with identity and state.
+- **Enums, shorter:** enums with fields exist today, in the indented form, and patterns
+  name the enum (`Shape.Circle(r)`). Candidates to measure:
+  - a one-line form for small enums: `enum Shape = Circle(r: float) | Rect(w: float, h: float)`;
+  - variants written without the enum's name in patterns, when the checker knows the
+    subject's type: `Circle(r) -> 3 * r * r`.
+
+  Missing cases become errors in strict code (item 5).
+- **Destructuring wherever a name is bound:** parameters (`fn dist((x1, y1), (x2, y2))`),
+  loops (already), assignments, `match` arms.
+
+### 3. Whole-collection operations
+
+- **Numeric arrays with element-wise arithmetic:** `ys = xs * 2.0 + offsets`,
+  `xs[xs > 0]`, `(a - b).abs.max`, with broadcasting, slicing and reductions. The same
+  expression runs as SIMD on the CPU, across cores, or on the GPU (Phases 13–14), chosen
+  by size and placement.
+- **A decision to take first:** `[1, 2] * 3` repeats a list today. Arithmetic on lists
+  would make that ambiguous. Options:
+  - a separate numeric array type (`array[float]`, built from a typed list with
+    `.array`): clear, one more type;
+  - element-wise operators (`.*`, `.+`): no new type, more symbols.
+
+  Rosetta's numeric tasks decide by word count and clarity.
+
+### 4. Where code runs, in one word
+
+- Today `fork` runs a call as a task, `par` on another core, and Phase 14 adds `gpu`. In
+  this phase the three become one idea, placement:
+  - a placement word before any call or block: `par compute(x)`,
+    `gpu xs.map(fn(v) = v * v)`;
+  - with a sensible default: big pure work on typed data may move to cores by itself
+    (Phase 13).
+- The same function compiles for every place it is used. The checker says plainly when a
+  function can't run somewhere ("a gpu call can't use a str").
+
+### 5. Safety at Rust's level, without Rust's words
+
+What Rust guarantees, and how Ixo meets it in strict code:
+
+| Rust guarantees                    | Ixo today                    | Ixo in strict code after this phase          |
+|------------------------------------|------------------------------|----------------------------------------------|
+| no use-after-free, no dangling data | yes: garbage collection       | same                                          |
+| no data races                       | yes: `par` heaps are isolated; frozen data is shared read-only; `fork` tasks take turns | same, and checked for GPU buffers too |
+| no null dereference                 | `T?` checked where types are known | every `nil` handled before use: a compile error otherwise |
+| errors can't be ignored             | `T!` values; ignoring one is allowed | an unhandled `T!` is a compile error (handle with `?`, `!`, `match`, or `_ =` to ignore on purpose) |
+| exhaustive `match`                  | warnings in some cases       | missing cases are errors for enums, `data` and types |
+| bounds checked                      | yes (panic)                  | same; Phase 12 removes the checks it can prove |
+| resources released                  | by the collector, eventually | `use f = fs.open(path)` closes at the end of the block, also on panic |
+| integer overflow caught             | wraps silently               | to decide: checked by default with wrapping operators (`+%`), or wrapping kept and checked in `ixo test` |
+| `unsafe` is explicit                | `ffi` calls are not marked   | raw memory (FFI, GPU addresses) only inside `unsafe`; `ixo check --unsafe` lists them |
+
+Why this is shorter than Rust: a garbage collector removes ownership, borrowing and
+lifetimes, which are most of Rust's annotations, while keeping its memory-safety result.
+Isolated heaps give its thread safety without `Send`/`Sync`.
+
+### 6. Fewer words, decided by the numbers
+
+- After items 1–5, a syntax pass in the style of Phase 7: every form is measured in
+  Rosetta words against Python's, and the ones that cost more are reworked.
+- Candidates to evaluate, not decisions:
+  - comprehension-like forms where `map`/`keep` chains read longer;
+  - one-word imports of common modules;
+  - pattern guards;
+  - string and regex literals for common shapes (dates, paths);
+  - a shorter `main` with typed command-line arguments parsed from the signature
+    (`fn main(input: path, top: int = 10)`);
+  - query-like operations on collections of records (group, join, sort by several
+    keys).
+- **Rule kept from Phase 7:** one way to write each thing; a shorter form replaces the
+  longer one rather than adding a second spelling.
+
+### 7. One source, every machine
+
+- `ixo build --target linux-arm64 | macos-arm64 | windows-x64 | wasm` packs a program for
+  another machine. The bytecode is portable; the runtime for each target is
+  downloaded once and cached.
+- Strict code runs as typed machine code on each CPU (Phases 12–13), on the GPU where
+  asked (14), and starts warm from its profile (15).
+- Every Rosetta task runs unchanged on x86-64, ARM64 and in the browser; the data-parallel
+  ones also on a GPU, with the CPU fallback elsewhere.
+
+### Migration
+
+As in Phase 7:
+- old spellings keep working with a warning and a quick fix;
+- `ixo fmt --upgrade` rewrites them, and the language server offers the fix;
+- examples, tests and docs move to the new forms;
+- the next major version removes the old spellings.
+
+This phase is the natural 1.0: the language stable, measured and documented.
+
+### Steps
+
+1. [ ] `bench/rosetta`: the tasks in four languages, the counting tool, the safety sheet,
+   the table in CI and the docs. The baseline is recorded before any change.
+2. [ ] Inference across functions and modules; strict and gradual modes; `ixo fmt
+   --annotate`.
+3. [ ] `data` records, enums with payloads, destructuring everywhere.
+4. [ ] The safety rules of item 5, as errors in strict code, each with a quick fix.
+5. [ ] The decision on numeric arrays, then whole-collection operations on SIMD, cores
+   and GPU.
+6. [ ] Placement words unified (`fork`, `par`, `gpu`).
+7. [ ] The syntax pass of item 6: a proposal list with Rosetta numbers, decided with you,
+   then implemented with deprecations.
+8. [ ] Cross-target `ixo build`; Rosetta on every target.
+9. [ ] Migration complete; docs rewritten around strict code; 1.0.
+
+Targets (the motto, counted on `bench/rosetta`):
+- **Shorter:** at most 0.8× Python's words on average, and more than Python on no task;
+  at most half of Rust's or C++'s.
+- **Fast:** strict Ixo within 1.5× idiomatic C++ on the numeric tasks, and faster than it
+  on text, collection and service tasks.
+- **Safe:** every planted mistake that Rust rejects before running is rejected by strict
+  Ixo, or can't be written; `unsafe` appears only where it was written.
+- **Everywhere:** every task runs unchanged on x86-64, ARM64 and wasm; the data-parallel
+  ones also on a GPU.
 
 ## Evaluated: an LLVM backend (not planned)
 

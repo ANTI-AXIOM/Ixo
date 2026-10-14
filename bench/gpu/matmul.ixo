@@ -1,0 +1,25 @@
+# C = A * B for 512 x 512 floats: one thread per item of C
+gpu fn matmul(a: buffer[float], b: buffer[float], c: buffer[float], n: int)
+    p = gpu.index
+    r = p // n
+    k = p % n
+    s = 0.0
+    for j in 0..n -> s += a[r * n + j] * b[j * n + k]
+    c[p] = s
+
+gpu fn init(a: buffer[float], b: buffer[float])
+    p = gpu.index
+    a[p] = float(p % 7) - 3.0
+    b[p] = float(p % 5) * 0.5
+
+n = 512
+a = gpu.floats(n * n)
+b = gpu.floats(n * n)
+c = gpu.floats(n * n)
+init(a, b)
+matmul(a, b, c, n)
+t0 = clock()
+for r in 0..5 -> matmul(a, b, c, n)
+t = (clock() - t0) / 5
+print(c[0], c[n * n - 1], c.list.sum)
+print(f"time {t}")

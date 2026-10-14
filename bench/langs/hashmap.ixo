@@ -1,0 +1,8 @@
+# counting with int keys
+fn run(n)
+    counts = {}
+    for i in 0..n
+        k = (i * 7919) % 100_003
+        counts[k] = counts.get(k, 0) + 1
+    print(counts.len, counts[0], counts[5])
+run(3_000_000)

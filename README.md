@@ -110,14 +110,20 @@ python tests/tools/profile_check.py      # --profile, --memprofile, IXO_JIT_STAT
 python tests/tools/pkg_check.py          # package manager (needs git)
 python tests/tools/build_check.py        # ixo build
 node tests/tools/playground_check.mjs    # the playground in headless Chrome
+node tests/tools/wgsl_check.mjs         # gpu fn kernels as WGSL, run in a real WebGPU (headless Chrome)
 python tests/run.py --ixo build/wasm/ixo --platform wasm   # the suite on WebAssembly
 python bench/run.py                      # benchmarks
 python bench/langs/run.py --no-jit       # Ixo vs C++ (g++ -O2) vs Python: time and peak memory
 python3 bench/backend/run.py             # Ixo's JIT vs LLVM-compiled code (Linux/macOS, clang)
 python bench/probes/run.py               # runtime-efficiency probes (ROADMAP Phase 11)
+python bench/gpu/run.py                  # gpu fn on the GPU, on the CPU fallback, as plain Ixo and as C++
 python tests/tools/fuzz.py 500           # parser/checker/formatter robustness
 python tests/tools/fuzz_run.py 500       # VM robustness
 IXO_GC_STRESS=1 python tests/run.py      # collect garbage at every safe point
+IXO_JIT_DEOPT_STRESS=1 python tests/run.py  # every guess of the typed JIT tier fails
+IXO_JIT_TIER2=0 python tests/run.py      # the plain JIT tier only
+IXO_GPU=cpu python tests/run.py          # gpu fn kernels on the CPU fallback
+IXO_SIMD=none python tests/run.py        # list operations without SIMD
 ```
 
 GitHub Actions runs these on Linux, Windows and macOS (`.github/workflows/ci.yml`). Pushing a

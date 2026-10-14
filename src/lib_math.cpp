@@ -27,12 +27,10 @@ static Value newMat(VM& vm, int r, int c) {
 
 static std::vector<double> numbersOf(VM& vm, Value v, const char* fname) {
     std::vector<double> out;
-    std::vector<Value>* items = nullptr;
-    if (isObjType(v, OT::List)) items = &as<ObjList>(v)->items;
-    if (isObjType(v, OT::Tuple)) items = &as<ObjTuple>(v)->items;
     if (isObjType(v, OT::Vec)) return as<ObjVec>(v)->v;
-    if (!items) vm.panic(std::string(fname) + "() expected a list of numbers, got " + vm.typeName(v));
-    for (auto& x : *items) {
+    SeqView items;
+    if (!seqOf(v, items)) vm.panic(std::string(fname) + "() expected a list of numbers, got " + vm.typeName(v));
+    for (Value x : items) {
         if (!x.isNum()) vm.panic(std::string(fname) + "() expected numbers, got a " + vm.typeName(x));
         out.push_back(x.num());
     }
@@ -132,9 +130,9 @@ NATIVE(mt_new) {
     if (n > 1) {
         std::vector<double> vals;
         Value src = a[1];
-        if (isObjType(src, OT::List) && !as<ObjList>(src)->items.empty() &&
-            (isObjType(as<ObjList>(src)->items[0], OT::List) || isObjType(as<ObjList>(src)->items[0], OT::Vec))) {
-            for (auto& row : as<ObjList>(src)->items) {
+        if (isObjType(src, OT::List) && as<ObjList>(src)->len() &&
+            (isObjType(as<ObjList>(src)->get(0), OT::List) || isObjType(as<ObjList>(src)->get(0), OT::Vec))) {
+            for (Value row : SeqView(*as<ObjList>(src))) {
                 auto rv = numbersOf(vm, row, "mat");
                 vals.insert(vals.end(), rv.begin(), rv.end());
             }
@@ -536,16 +534,14 @@ static Value rint(VM& vm, ObjRng* r, Value* a, int off) {
     return Value::integer(std::uniform_int_distribution<int64_t>(lo, hi)(r->gen));
 }
 static Value rpick(VM& vm, ObjRng* r, Value v) {
-    std::vector<Value>* items = nullptr;
-    if (isObjType(v, OT::List)) items = &as<ObjList>(v)->items;
-    if (isObjType(v, OT::Tuple)) items = &as<ObjTuple>(v)->items;
-    if (!items) vm.panic("pick() expects a list");
-    if (items->empty()) return Value();
-    return (*items)[std::uniform_int_distribution<size_t>(0, items->size() - 1)(r->gen)];
+    SeqView items;
+    if (!seqOf(v, items)) vm.panic("pick() expects a list");
+    if (items.empty()) return Value();
+    return items[std::uniform_int_distribution<size_t>(0, items.size() - 1)(r->gen)];
 }
 static Value rmix(VM& vm, ObjRng* r, Value v) {
     if (!isObjType(v, OT::List)) vm.panic("mix() expects a list");
-    std::vector<Value> items = as<ObjList>(v)->items;
+    std::vector<Value> items = SeqView(*as<ObjList>(v)).vec();
     for (size_t i = items.size(); i > 1; i--) {
         size_t j = std::uniform_int_distribution<size_t>(0, i - 1)(r->gen);
         std::swap(items[i - 1], items[j]);

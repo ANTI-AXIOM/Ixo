@@ -73,4 +73,17 @@ struct Value {
     double num() const { return t == VT::Int ? (double)i : f; }
 };
 
+// Kinds of values in a type profile (ObjFunction::typeSeen).
+enum ProfBits : uint8_t { PB_INT = 1, PB_FLOAT = 2, PB_BOOL = 4, PB_NIL = 8, PB_OTHER = 16,
+                          PB_NOTLIST = 32 };  // (indexing: the container wasn't a list)
+inline uint8_t profBit(const Value& v) {
+    switch (v.t) {
+        case VT::Int: return PB_INT;
+        case VT::Float: return PB_FLOAT;
+        case VT::Bool: return PB_BOOL;
+        case VT::Nil: return PB_NIL;
+        default: return PB_OTHER;
+    }
+}
+
 }  // namespace ixo

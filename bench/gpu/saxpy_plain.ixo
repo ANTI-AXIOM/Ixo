@@ -1,0 +1,16 @@
+# y = a * x + y over 16M floats: plain Ixo (a list of floats, one core)
+fn saxpy(a, x, y)
+    for i in 0..y.len -> y[i] = a * x[i] + y[i]
+
+n = 16_000_000
+x = []
+y = []
+for i in 0..n
+    x.add(i % 1000 * 1.0)
+    y.add(1.0)
+saxpy(0.5, x, y)
+t0 = clock()
+for r in 0..3 -> saxpy(0.5, x, y)
+t = (clock() - t0) / 3
+print(y[999], y[n - 1])
+print(f"time {t}")

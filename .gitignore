@@ -17,3 +17,6 @@ __pycache__/
 
 # WebAssembly builds
 playground/dist/
+
+# warm-start profiles (IXO_JIT_CACHE=1)
+.ixo-cache/

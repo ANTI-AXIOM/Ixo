@@ -1,0 +1,111 @@
+# The typed tier (ints, floats and bools in registers) must give exactly what
+# the interpreter gives, including when its guesses about types turn out wrong.
+
+# floor division and modulo by constants, negative numbers included
+fn divs(n)
+    t = 0
+    for x in -n..n
+        t += x % 7 + x // 7 + x % 8 + x // 8 + x % 1 + x // 1 + x % 1000003 + x // 1000003
+    t
+print(divs(20000))                                   # expect: 20000220000
+fn bigdiv(n)
+    t = 0
+    x = 9_000_000_000_000_000_000
+    for i in 0..n
+        t += (x - i) // 641 % 1000 + (i - x) % 641
+    t
+print(bigdiv(3000))                                  # expect: 3680945
+
+# int and float mixed, -0.0, NaN comparisons
+fn mix(n)
+    a = 0
+    b = 0.0
+    for i in 0..n
+        a += i * 3 - 1
+        b += i / 4
+        b = b - 0.5 * i
+    (a, b)
+print(mix(10000))                                    # expect: (149975000, -12498750.0)
+fn negz(n)
+    z = 0.0
+    for i in 0..n -> z = -z
+    1.0 / z
+print(negz(3001))                                    # expect: -inf
+fn nans(n)
+    c = 0
+    nan = 0.0 / 0.0
+    for i in 0..n
+        if nan < i -> c += 1
+        if nan >= i -> c += 10
+        if i < nan -> c += 100
+    c
+print(nans(5000))                                    # expect: 0
+
+# bools in registers
+fn flips(n)
+    on = false
+    c = 0
+    for i in 0..n
+        on = not on
+        if on and i % 3 == 0 -> c += 1
+    c
+print(flips(30000))                                  # expect: 5000
+
+# fields guessed to be floats, then not
+class P(x, y)
+fn walk(ps, n)
+    s = 0.0
+    for k in 0..n
+        for p in ps -> s += p.x * p.y
+    s
+ps = [P(1.5, 2.0), P(0.5, 4.0)]
+print(walk(ps, 3000))                                # expect: 15000.0
+ps.add(P(2, 3))                                      # an int field now
+print(walk(ps, 3000))                                # expect: 33000.0
+ps[0] = P(nil, 1)                                    # a field that holds no number at all
+print(ps[0].x, walk([P(1.0, 1.0)], 2))               # expect: nil 2.0
+
+# typed lists read and written in loops, widening in the middle
+fn fill(n)
+    xs = [0] * n
+    for i in 0..n -> xs[i] = i * i
+    xs[n // 2] = 0.5
+    t = 0.0
+    for i in 0..n -> t += xs[i]
+    t
+print(fill(5000))                                    # expect: 41647917500.5
+
+# a variable that changes type inside a hot loop
+fn shifty(n)
+    v = 0
+    out = 0
+    for i in 0..n
+        if i == n - 10 -> v = "s"
+        if v is int -> v += 1
+        out += 1
+    (v, out)
+print(shifty(20000))                                 # expect: ("s", 20000)
+
+# recursion with ints
+fn fib(n) = if n < 2 -> n else fib(n - 1) + fib(n - 2)
+print(fib(22))                                       # expect: 17711
+
+# while loops, a counter kept in a register, a break out of it
+fn firstOver(limit)
+    i = 0
+    s = 0
+    while true
+        s += i * i
+        if s > limit -> break
+        i += 1
+    (i, s)
+print(firstOver(10_000_000))                         # expect: (311, 10075156)
+
+# floor modulo and division by negative divisors, entered mid-loop (no symmetry to hide errors)
+fn modneg(n)
+    s = 0
+    for a in -n..=n
+        for b in -5..=5
+            if b != 0 -> s += (a % b) * (b + 7) + a // b
+    s
+print(modneg(400))                                   # expect: 29832

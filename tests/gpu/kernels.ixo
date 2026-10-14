@@ -1,0 +1,78 @@
+# gpu fn kernels: the same results on a GPU (Vulkan) and on the CPU fallback (IXO_GPU=cpu).
+gpu fn saxpy(a: float, x: buffer[float], y: buffer[float])
+    i = gpu.index
+    if i < y.len -> y[i] = a * x[i] + y[i]
+
+xs = []
+for i in 0..1000 -> xs.add(i * 0.5)
+x = gpu.floats(xs)
+y = gpu.floats(1000)
+saxpy(2.0, x, y).await
+print(y.len, y[0], y[1], y[999], y.list.sum)        # expect: 1000 0.0 1.0 999.0 499500.0
+
+# ints, floored division and modulo (negative numbers too), bit operators
+gpu fn arith(out: buffer[int])
+    i = gpu.index
+    a = i - 50
+    out[i] = a // 7 * 1000 + a % 7 * 10 + (a & 5) - (a >> 1) + (1 << (i % 5))
+o = gpu.ints(100)
+arith(o)
+t = 0
+for i in 0..100
+    a = i - 50
+    t += o[i] - (a // 7 * 1000 + a % 7 * 10 + (a & 5) - (a >> 1) + (1 << (i % 5)))
+print(t, o[0], o[99])                                # expect: 0 -7910 6993
+
+# loops: while with break and continue, for with a step, nested ifs, bools
+gpu fn loops(out: buffer[int], limit: int, odd: bool)
+    i = gpu.index
+    s = 0
+    k = 0
+    while true
+        k += 1
+        if k > limit -> break
+        if k % 2 == 1 and not odd -> continue
+        s += k
+    for j in 10..0 by -2
+        if j == 4
+            s += 100
+        else
+            s += 1
+    out[i] = s + i
+lo = gpu.ints(4)
+loops(lo, 10, false)
+print(lo.list)                                       # expect: [134, 135, 136, 137]
+loops(lo, 10, true)
+print(lo.list)                                       # expect: [159, 160, 161, 162]
+
+# math, conversions and mixed numbers (values that are exact in 32-bit floats)
+gpu fn maths(f: buffer[float], n: buffer[int])
+    i = gpu.index
+    v = float(i) - 2.5
+    f[i] = abs(v) + v.floor + min(v, 1.0) + max(i, 2) + sqrt(16.0) + v.abs * 2
+    n[i] = int(v * 3.0) + abs(i - 3) + min(i, 2) + max(-i, -1)
+mf = gpu.floats(6)
+mn = gpu.ints(6)
+maths(mf, mn)
+print(mf.list)                                       # expect: [8.0, 7.0, 6.0, 9.0, 14.5, 19.5]
+print(mn.list)                                       # expect: [-4, -2, 1, 2, 6, 10]
+
+# an explicit thread count, and a kernel with no buffer argument first
+gpu fn fill(v: int, out: buffer[int])
+    out[gpu.index] = v * gpu.index
+f = gpu.ints(8)
+gpu.launch(5, fill, 3, f).await
+print(f.list)                                        # expect: [0, 3, 6, 9, 12, 0, 0, 0]
+
+# buffers on the CPU side
+b = gpu.buffer([1, 2, 3])
+b[1] = 20
+b.upload([4, 5, 6])
+c = gpu.buffer([1, 2.5])
+print(b.list, c.list, c.len, b)                      # expect: [4, 5, 6] [1.0, 2.5] 2 <gpu buffer of 3 ints>
+b.free
+
+# reading outside a buffer stops the program with the index
+gpu fn bad(x: buffer[int])
+    x[gpu.index + 2] = 1
+bad(gpu.ints(4))                                     # expect panic: index 4 is out of range for buffer 'x' of length 4

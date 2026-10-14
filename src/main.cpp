@@ -44,6 +44,7 @@ static void usage() {
         "           [--filter text] [--json] [--watch]\n"
         "  ixo new <name>              create a project\n"
         "  ixo build [file] [-o out]   pack a program and its modules into one executable\n"
+        "  ixo cache clean             forget hot functions remembered by IXO_JIT_CACHE=1 runs\n"
         "  ixo init [name]             add an ixo.toml to the current folder\n"
         "  ixo add <git-url|folder>    add a package (and install it)\n"
         "          [name] [--rev r]\n"
@@ -110,7 +111,7 @@ static int cmdRun(const std::string& path, const std::vector<std::string>& args,
     Program prog;
     prog.opts.typeCheck = ro.typeCheck;
     Value argList = prog.vm.builtins[prog.vm.builtinIndex("args")].value;
-    for (auto& a : args) as<ObjList>(argList)->items.push_back(prog.vm.vstr(a));
+    for (auto& a : args) as<ObjList>(argList)->push(prog.vm.vstr(a));
     Diagnostics diags;
     ModuleUnit* m = prog.loadFile(path, diags, prog.opts);
     if (!m) {
@@ -131,8 +132,10 @@ static int cmdRun(const std::string& path, const std::vector<std::string>& args,
     OpStats opstats;
     bool wantOpStats = std::getenv("IXO_OPSTATS") != nullptr;
     if (wantOpStats) prog.vm.debugger = &opstats;
+    if (!ro.profile && !ro.memprofile && !wantOpStats) prog.vm.warmLoad(path);
     bool ok = prog.run(m);
     flushOut();
+    prog.vm.warmSave();
     prog.vm.printJitStats();
     if (wantOpStats) {
         prog.vm.debugger = nullptr;
@@ -367,6 +370,7 @@ int main(int argc, char** argv) {
     }
     if (cmd == "new") return runNewProject(rest);
     if (cmd == "build") return runBuild(rest);
+    if (cmd == "cache") return runCacheCommand(rest);
     if (cmd == "init") return runInit(rest);
     if (cmd == "add") return runAdd(rest);
     if (cmd == "install") return runInstall(rest);

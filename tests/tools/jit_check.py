@@ -24,8 +24,9 @@ def main():
     for d in ("tests", "examples", "bench"):
         for dirpath, _, names in os.walk(os.path.join(ROOT, d)):
             for n in names:
-                # bench/probes are slow measurement programs (bench/probes/run.py runs them)
-                skip = "compile_errors" in dirpath or os.path.basename(dirpath) == "probes"
+                # bench/probes and bench/gpu are slow measurement programs (their run.py runs them)
+                slow = os.path.basename(dirpath) in ("probes", "gpu") and os.path.basename(os.path.dirname(dirpath)) == "bench"
+                skip = "compile_errors" in dirpath or slow
                 if n.endswith(".ixo") and not skip and not n.startswith("_"):
                     files.append(os.path.join(dirpath, n))
     bad = 0

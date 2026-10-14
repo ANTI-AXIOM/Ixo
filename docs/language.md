@@ -28,6 +28,7 @@ loops). Code written for Ixo 0.5 still runs, with a warning for each old spellin
 - [Packages and building](#packages-and-building)
 - [Concurrency](#concurrency)
 - [Parallelism](#parallelism)
+- [GPU compute](#gpu-compute)
 - [Memory regions](#memory-regions)
 - [More of the standard library](#more-of-the-standard-library)
 - [Performance](#performance)
@@ -945,6 +946,48 @@ print((0..4).map(par lookup(table, _ * 1000)).map(_.await))   # [0, 2000, 4000, 
 A panic in a par task stops the program and names the task's function. The debugger and the
 profilers see par workers too.
 
+## GPU compute
+
+A `gpu fn` is a kernel: a function that runs once per thread, many threads at a time, on the
+GPU. Its threads share buffers of numbers; each thread finds its position with `gpu.index`.
+
+```ixo
+gpu fn saxpy(a: float, x: buffer[float], y: buffer[float])
+    i = gpu.index
+    if i < y.len -> y[i] = a * x[i] + y[i]
+
+x = gpu.floats([1.0, 2.0, 3.0])        # a buffer from a list
+y = gpu.floats(3)                      # three zeros
+saxpy(2.0, x, y).await                 # one thread per item of the first buffer
+print(y.list)                          # [2.0, 4.0, 6.0]
+```
+
+- **Buffers:** `gpu.floats(n or list)`, `gpu.ints(n or list)`, `gpu.buffer(list)` (floats if any
+  item is a float). On the device, numbers are 32-bit, as in WGSL and on most GPUs: an int
+  that doesn't fit is an error, and floats keep about 7 digits. A buffer has `.len`, `.list`,
+  `.upload(xs)`, `b[i]` and `b[i] = v`, and `.free` (the collector frees it otherwise). The
+  CPU reads and writes buffers in place: no copies.
+- **Launching:** calling a `gpu fn` starts one thread per item of its first buffer argument
+  and gives a task, already finished: launches run in order. `gpu.launch(n, kernel, args...)`
+  starts `n` threads instead.
+- **What a gpu fn can use:** parameters typed `int`, `float`, `bool`, `buffer[int]` or
+  `buffer[float]`; its own variables (ints, floats and bools); arithmetic (`//` and `%` floor,
+  as everywhere in Ixo; dividing an int by 0 gives 0 on the device); comparisons, `and`, `or`,
+  `not`, bit operators; `if`, `while`, `for i in a..b (by a constant)`, `break`, `continue`,
+  `return`; math (`sqrt`, `abs`, `min`, `max`, `floor`, `ceil`, `sin`, `cos`, `tan`, `exp`, `log`,
+  `pow`, `float`, `int`, and their method forms like `x.sqrt`). Anything else (strings, lists,
+  maps, closures, other calls) is a compile error that says what isn't allowed.
+- **Indexing outside a buffer** stops the program with the kernel, the index and the buffer.
+- **Where it runs:** on a GPU through Vulkan (Windows, Linux; macOS through MoltenVK), loaded
+  when the program first uses `gpu`. Without a GPU or Vulkan, the same kernels run on all
+  CPU cores, with the same results (`IXO_GPU=cpu` forces that). `gpu.device` names the GPU
+  in use (or `"cpu"`), `gpu.devices` lists them, `IXO_GPU_DEVICE=n` picks one.
+- **For the web:** `gpu.wgsl(kernel)` gives the kernel as WGSL for WebGPU (and `gpu.spirv`
+  as SPIR-V words), with the same bindings: the buffers in order, a status buffer, then the
+  scalars in a uniform.
+
+`bench/gpu` compares kernels on the GPU, on the CPU fallback, as plain Ixo loops and as C++.
+
 ## Memory regions
 
 A region block marks memory that is only needed inside it. When the block ends, whatever it
@@ -1116,8 +1159,14 @@ also writes folded stacks for flame graph tools. `--memprofile` reports what all
 memory, how much is live and how long garbage collection took; it runs without the JIT, so
 allocation sites are exact. Both include par workers. `IXO_JIT_STATS=1` lists where machine
 code hands over to the interpreter (function, line and instruction) and which functions or
-loops the JIT gave up on. `IXO_GC_STATS=1` prints how long each garbage collection spends
-marking and sweeping.
+loops the JIT gave up on, with the number of compiles and their total time; `IXO_JIT_LOG=1`
+prints each compile as it happens. `IXO_GC_STATS=1` prints how long each garbage collection
+spends marking and sweeping.
+
+Lists that hold only ints, only floats or only bools are stored packed (8 bytes per int or
+float, 1 per bool, instead of 16); this never shows in what a program does. `IXO_JIT_CACHE=1`
+remembers which functions got hot, so the next run compiles them sooner (`ixo cache clean`
+forgets it); it is off by default because today it measures no gain.
 
 ## Tools
 
@@ -1129,6 +1178,7 @@ marking and sweeping.
 | `ixo new name` | create a project |
 | `ixo init`, `ixo add`, `ixo install`, `ixo update`, `ixo remove` | packages (see [Packages](#packages-and-building)) |
 | `ixo build [file] [-o out]` | pack a program into one executable |
+| `ixo cache clean` | forget the hot functions remembered by `IXO_JIT_CACHE=1` runs |
 | `ixo check files...` | syntax, name and type errors, without running |
 | `ixo fmt [--check] files or dirs` | format: 4-space indentation, spacing; comments kept |
 | `ixo fmt --upgrade files or dirs` | rewrite old spellings (see [Upgrading from 0.5](#upgrading-from-05)), then format |

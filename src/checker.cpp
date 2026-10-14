@@ -518,6 +518,7 @@ struct Checker::Impl {
         if (n == "fn") return tFnAny;
         if (n == "range") return tRange;
         if (n == "task") return tTask;
+        if (n == "buffer") return tAny;  // gpu buffer[int] / buffer[float] (gpu fn parameters)
         if (n == "vec") return tVec;
         if (n == "mat") return tMat;
         if (n == "quat") return tQuat;
@@ -772,8 +773,8 @@ struct Checker::Impl {
         } else {
             t = it->second;
         }
-        if (f->isFork || f->isPar)
-            t->ret = tTask;  // calling a fork fn / par fn starts a task
+        if (f->isFork || f->isPar || f->isGpu)
+            t->ret = tTask;  // calling a fork fn / par fn starts a task; a gpu fn, a launch
         else if (f->ret)
             t->ret = fromTypeExpr(f->ret.get());
         else {
@@ -2341,6 +2342,11 @@ struct Checker::Impl {
     }
 
     void fnDecl(FnDecl* f) {
+        if (f->isGpu) {  // the kernel compiler checks a gpu fn (gpu.cpp)
+            for (auto& p : f->params)
+                if (p.type) fromTypeExpr(p.type.get());
+            return;
+        }
         for (auto& p : f->params) {
             if (!p.def) continue;
             Type* dt = expr(p.def.get());

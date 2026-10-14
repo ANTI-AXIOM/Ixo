@@ -1,0 +1,13 @@
+# Requests per status code and the three slowest endpoints, from access log lines.
+paths = ["/", "/login", "/api/items", "/api/orders", "/static/app.js"]
+log = (0..50_000).map(f"10.0.0.{_ % 50} GET {paths[_ % 5]} {[200, 200, 404, 500, 302][_ * 3 % 5]} {_ * 37 % 900}ms")
+by_status = {}
+total = {}
+seen = {}
+for line in log
+    ip, method, path, status, ms = line.cut
+    by_status[status] = by_status.get(status, 0) + 1
+    total[path] = total.get(path, 0) + ms[..-2].int
+    seen[path] = seen.get(path, 0) + 1
+for s in by_status.keys.sort -> print(s, by_status[s])
+for p in total.keys.sort_by(-total[_] / seen[_])[..3] -> print(p, f"{total[p] / seen[p]:.1f}")

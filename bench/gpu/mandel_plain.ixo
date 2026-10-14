@@ -1,0 +1,23 @@
+# Mandelbrot, 1024 x 768, 256 iterations: plain Ixo loops (64-bit floats, one core)
+fn mandel(out, w, h, iters)
+    for p in 0..w * h
+        x0 = (p % w) / w * 3.5 - 2.5
+        y0 = (p // w) / h * 2.0 - 1.0
+        x = 0.0
+        y = 0.0
+        k = 0
+        while k < iters and x * x + y * y <= 4.0
+            t = x * x - y * y + x0
+            y = 2.0 * x * y + y0
+            x = t
+            k += 1
+        out[p] = k
+
+w = 1024
+h = 768
+out = [0] * (w * h)
+t0 = clock()
+mandel(out, w, h, 256)
+t = clock() - t0
+print(out.sum)
+print(f"time {t}")

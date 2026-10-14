@@ -1,0 +1,8 @@
+# records sorted by a key (stable)
+class Person(name, age)
+fn run(n)
+    people = []
+    for i in 0..n -> people.add(Person(f"p{i}", (i * 7919) % 100))
+    by_age = people.sort_by(_.age)
+    print(by_age[0].age, by_age[n - 1].age, by_age[n // 2].name)
+run(300_000)

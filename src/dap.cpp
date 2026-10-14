@@ -585,7 +585,7 @@ private:
     static bool hasChildren(Value v) {
         if (!v.isObj()) return false;
         switch (v.o->type) {
-            case OT::List: return !as<ObjList>(v)->items.empty();
+            case OT::List: return as<ObjList>(v)->len() != 0;
             case OT::Tuple: return !as<ObjTuple>(v)->items.empty();
             case OT::Map: return as<ObjMap>(v)->live > 0;
             case OT::Set: return as<ObjSet>(v)->live > 0;
@@ -601,8 +601,8 @@ private:
         if (!v.isObj()) return out;
         switch (v.o->type) {
             case OT::List: {
-                auto& items = as<ObjList>(v)->items;
-                for (size_t i = 0; i < items.size() && i < limit; i++) out.push_back({"[" + std::to_string(i) + "]", items[i]});
+                auto* l = as<ObjList>(v);
+                for (size_t i = 0; i < l->len() && i < limit; i++) out.push_back({"[" + std::to_string(i) + "]", l->get(i)});
                 break;
             }
             case OT::Tuple: {
@@ -643,11 +643,11 @@ private:
     // Display form that never runs Ixo code.
     std::string display(VM& vm, Value v, int depth = 0) {
         if (!v.isObj()) return vm.repr(v);
-        auto list = [&](const std::vector<Value>& items, const char* open, const char* close) {
+        auto list = [&](SeqView items, const char* open, const char* close) {
             if (depth > 2) return std::string(open) + "..." + close;
             std::string s = open;
             size_t n = 0;
-            for (auto& x : items) {
+            for (Value x : items) {
                 if (x.isUndef()) continue;
                 if (n) s += ", ";
                 if (n++ >= 20 || s.size() > 200) {
@@ -659,7 +659,7 @@ private:
             return s + close;
         };
         switch (v.o->type) {
-            case OT::List: return list(as<ObjList>(v)->items, "[", "]");
+            case OT::List: return list(SeqView(*as<ObjList>(v)).vec(), "[", "]");
             case OT::Set: return list(as<ObjSet>(v)->items, "{", "}");
             case OT::Tuple: {
                 auto& items = as<ObjTuple>(v)->items;
@@ -826,9 +826,8 @@ private:
                 i = close + 1;
                 while (!key.empty() && key.front() == ' ') key.erase(0, 1);
                 while (!key.empty() && key.back() == ' ') key.pop_back();
-                const std::vector<Value>* items = isObjType(out, OT::List)    ? &as<ObjList>(out)->items
-                                                  : isObjType(out, OT::Tuple) ? &as<ObjTuple>(out)->items
-                                                                              : nullptr;
+                SeqView seq;
+                const SeqView* items = seqOf(out, seq) ? &seq : nullptr;
                 if (items) {
                     char* end = nullptr;
                     long long k = std::strtoll(key.c_str(), &end, 10);
@@ -948,9 +947,9 @@ private:
         }
         if (isObjType(c, OT::List) && name.size() > 2 && name[0] == '[') {
             size_t i = (size_t)std::strtoul(name.c_str() + 1, nullptr, 10);
-            auto& items = as<ObjList>(c)->items;
-            if (i < items.size()) {
-                items[i] = v;
+            auto* l = as<ObjList>(c);
+            if (i < l->len()) {
+                l->set(i, v);
                 return true;
             }
         } else if (isObjType(c, OT::Instance)) {
@@ -1312,7 +1311,7 @@ private:
             program_ = &prog;
             prog.opts.typeCheck = typeCheck;
             Value argList = prog.vm.builtins[prog.vm.builtinIndex("args")].value;
-            for (auto& x : args) as<ObjList>(argList)->items.push_back(prog.vm.vstr(x));
+            for (auto& x : args) as<ObjList>(argList)->push(prog.vm.vstr(x));
             prog.vm.onPanic = [this](const std::string& msg, const std::vector<StackEntry>& trace) {
                 std::string s = "panic: " + msg + "\n";
                 for (auto& e : trace) s += "    at " + e.function + " (" + e.file + ":" + std::to_string(e.line) + ")\n";

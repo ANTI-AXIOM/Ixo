@@ -80,6 +80,7 @@ Tag VM::tagOf(Value v) {
         case OT::Mat: return Tag::Mat;
         case OT::Quat: return Tag::Quat;
         case OT::Rng: return Tag::Rng;
+        case OT::GpuBuffer: return Tag::GpuBuf;
         case OT::Time: return Tag::Time;
         case OT::Iterator: return Tag::Iter;
         default: return Tag::Nil;
@@ -118,6 +119,7 @@ std::string VM::typeName(Value v) {
         case OT::Mat: return "mat";
         case OT::Quat: return "quat";
         case OT::Rng: return "rng";
+        case OT::GpuBuffer: return "gpu buffer";
         case OT::Time: return "time";
         case OT::Iterator: return "iterator";
         case OT::Interface: return "interface";
@@ -166,7 +168,7 @@ std::string VM::toStrDepth(Value v, bool quote, int depth) {
         case VT::Done: return "<done>";
         case VT::Obj: break;
     }
-    auto join = [&](const std::vector<Value>& items, const char* open, const char* close) {
+    auto join = [&](SeqView items, const char* open, const char* close) {
         std::string s = open;
         for (size_t i = 0; i < items.size(); i++) {
             if (i) s += ", ";
@@ -176,7 +178,7 @@ std::string VM::toStrDepth(Value v, bool quote, int depth) {
     };
     switch (v.o->type) {
         case OT::String: return quote ? quoteStr(as<ObjString>(v)->s) : as<ObjString>(v)->s;
-        case OT::List: return join(as<ObjList>(v)->items, "[", "]");
+        case OT::List: return join(SeqView(*as<ObjList>(v)), "[", "]");
         case OT::Tuple: {
             auto& items = as<ObjTuple>(v)->items;
             if (items.size() == 1) return "(" + toStrDepth(items[0], true, depth + 1) + ",)";
@@ -269,6 +271,10 @@ std::string VM::toStrDepth(Value v, bool quote, int depth) {
             return "quat(" + fmtFloat(q->x) + ", " + fmtFloat(q->y) + ", " + fmtFloat(q->z) + ", " + fmtFloat(q->w) + ")";
         }
         case OT::Rng: return "<rng>";
+        case OT::GpuBuffer: {
+            auto* b = static_cast<ObjGpuBuffer*>(v.o);
+            return std::string("<gpu buffer of ") + std::to_string(b->n) + (b->floats ? " floats>" : " ints>");
+        }
         case OT::Time: {
             Value t = v;
             auto& table = methods[(int)Tag::Time];
@@ -304,8 +310,9 @@ bool VM::equals(Value a, Value b) {
         case OT::String: return as<ObjString>(a)->s == as<ObjString>(b)->s;
         case OT::List:
         case OT::Tuple: {
-            auto& x = a.o->type == OT::List ? as<ObjList>(a)->items : as<ObjTuple>(a)->items;
-            auto& y = b.o->type == OT::List ? as<ObjList>(b)->items : as<ObjTuple>(b)->items;
+            SeqView x, y;
+            seqOf(a, x);
+            seqOf(b, y);
             if (x.size() != y.size()) return false;
             for (size_t i = 0; i < x.size(); i++)
                 if (!equals(x[i], y[i])) return false;
@@ -378,8 +385,9 @@ int VM::compare(Value a, Value b) {
     bool seqA = isObjType(a, OT::List) || isObjType(a, OT::Tuple);
     bool seqB = isObjType(b, OT::List) || isObjType(b, OT::Tuple);
     if (seqA && seqB && a.o->type == b.o->type) {
-        auto& x = a.o->type == OT::List ? as<ObjList>(a)->items : as<ObjTuple>(a)->items;
-        auto& y = b.o->type == OT::List ? as<ObjList>(b)->items : as<ObjTuple>(b)->items;
+        SeqView x, y;
+        seqOf(a, x);
+        seqOf(b, y);
         for (size_t i = 0; i < x.size() && i < y.size(); i++) {
             int c = compare(x[i], y[i]);
             if (c) return c;
@@ -728,15 +736,15 @@ Value VM::binaryOp(uint8_t op, Value a, Value b) {
                 break;
             case OT::List:
                 if (op == OP_ADD) {
-                    std::vector<Value> out = as<ObjList>(a)->items;
-                    auto& y = as<ObjList>(b)->items;
+                    std::vector<Value> out = SeqView(*as<ObjList>(a)).vec();
+                    SeqView y(*as<ObjList>(b));
                     out.insert(out.end(), y.begin(), y.end());
                     return newList(std::move(out));
                 }
                 break;
             case OT::Tuple:
                 if (op == OP_ADD) {
-                    std::vector<Value> out = as<ObjTuple>(a)->items;
+                    std::vector<Value> out = SeqView(as<ObjTuple>(a)->items).vec();
                     auto& y = as<ObjTuple>(b)->items;
                     out.insert(out.end(), y.begin(), y.end());
                     return newTuple(std::move(out));
@@ -788,15 +796,11 @@ Value VM::binaryOp(uint8_t op, Value a, Value b) {
         Value l = isObjType(a, OT::List) ? a : b;
         Value m = isObjType(a, OT::List) ? b : a;
         if (isObjType(l, OT::List) && m.t == VT::Int) {
-            const auto& items = as<ObjList>(l)->items;
-            std::vector<Value> out;
-            if (m.i > 0) out.reserve(items.size() * (size_t)m.i);
-            if (items.size() == 1) {
-                out.assign((size_t)std::max<int64_t>(m.i, 0), items[0]);
-            } else {
-                for (int64_t i = 0; i < m.i; i++) out.insert(out.end(), items.begin(), items.end());
-            }
-            return newList(std::move(out));
+            auto* src = as<ObjList>(l);
+            auto* out = alloc<ObjList>();
+            out->assignRepeat(*src, (size_t)std::max<int64_t>(m.i, 0));  // packed lists stay packed
+            grow(out, out->len() * out->elemSize());
+            return Value::object(out);
         }
     }
     if (isObjType(a, OT::Time) && b.isNum() && (op == OP_ADD || op == OP_SUB))
@@ -884,16 +888,19 @@ Value VM::freeze(Value v) {
             case OT::String: {
                 auto* s = static_cast<ObjString*>(own(new ObjString(static_cast<ObjString*>(o)->s)));
                 s->hash();  // computed now: later reads from other threads don't write
+                VM::ascii(s);
                 return Value::object(s);
             }
             case OT::List: {
                 auto* l = static_cast<ObjList*>(own(new ObjList()));
-                for (auto& e : static_cast<ObjList*>(o)->items) l->items.push_back(fz(e));
+                for (Value e : SeqView(*static_cast<ObjList*>(o))) l->push(fz(e));
                 return Value::object(l);
             }
             case OT::Tuple: {
-                auto* t = static_cast<ObjTuple*>(own(new ObjTuple()));
-                for (auto& e : static_cast<ObjTuple*>(o)->items) t->items.push_back(fz(e));
+                auto& src = static_cast<ObjTuple*>(o)->items;
+                void* mem = ::operator new(sizeof(ObjTuple) + src.size() * sizeof(Value));
+                auto* t = static_cast<ObjTuple*>(own(tupleInit(mem, src.size())));
+                for (size_t k = 0; k < src.size(); k++) t->items[k] = fz(src[k]);
                 return Value::object(t);
             }
             case OT::Set: {
@@ -933,7 +940,8 @@ Value VM::getIndex(Value obj, Value idx) {
         case OT::List:
         case OT::Tuple: {
             bool isList = obj.o->type == OT::List;
-            auto& items = isList ? as<ObjList>(obj)->items : as<ObjTuple>(obj)->items;
+            SeqView items;
+            seqOf(obj, items);
             if (isObjType(idx, OT::Range)) {
                 auto* r = as<ObjRange>(idx);
                 if (plainSlice(r)) {
@@ -951,12 +959,14 @@ Value VM::getIndex(Value obj, Value idx) {
         }
         case OT::String: {
             const std::string& s = as<ObjString>(obj)->s;
-            size_t len = isAscii(s) ? s.size() : utf8Length(s);
+            bool asc = ascii(as<ObjString>(obj));
+            size_t len = asc ? s.size() : utf8Length(s);
             if (isObjType(idx, OT::Range)) {
                 auto* r = as<ObjRange>(idx);
                 if (plainSlice(r)) {
                     size_t lo, hi;
                     sliceBounds(r, len, lo, hi);
+                    if (asc) return vstr(s.substr(lo, hi - lo));
                     size_t a = utf8Offset(s, lo), b = utf8Offset(s, hi);
                     return vstr(s.substr(a, b - a));
                 }
@@ -969,8 +979,14 @@ Value VM::getIndex(Value obj, Value idx) {
             }
             if (!idx.isNum()) panic("string index must be an int, got " + typeName(idx));
             int64_t i = normIndex(*this, wholeNumber(*this, idx, "index"), len, "str");
+            if (asc) return charStr((unsigned char)s[(size_t)i]);
             size_t off = utf8Offset(s, (size_t)i);
             return vstr(s.substr(off, utf8CharLen((unsigned char)s[off])));
+        }
+        case OT::GpuBuffer: {
+            auto* b = static_cast<ObjGpuBuffer*>(obj.o);
+            int64_t i = normIndex(*this, wholeNumber(*this, idx, "index"), b->n, "gpu buffer");
+            return b->floats ? Value::number(b->fl()[i]) : Value::integer(b->in()[i]);
         }
         case OT::Map: {
             Value* v = as<ObjMap>(obj)->find(idx);
@@ -1012,14 +1028,30 @@ void VM::setIndex(Value obj, Value idx, Value v) {
         if (callOperator(obj, "[]=", args, 2, out)) return;
     }
     if (isObjType(obj, OT::List)) {
-        auto& items = as<ObjList>(obj)->items;
+        auto* l = as<ObjList>(obj);
         if (!idx.isNum()) panic("list index must be an int, got " + typeName(idx));
-        items[normIndex(*this, wholeNumber(*this, idx, "index"), items.size(), "list")] = v;
+        size_t at = normIndex(*this, wholeNumber(*this, idx, "index"), l->len(), "list");
+        size_t before = l->elemSize();
+        l->set(at, v);
+        if (l->elemSize() > before) grow(l, l->len() * (l->elemSize() - before));
         return;
     }
     if (isObjType(obj, OT::Map)) {
         requireHashable(*this, idx);
         as<ObjMap>(obj)->set(idx, v);
+        return;
+    }
+    if (isObjType(obj, OT::GpuBuffer)) {  // 32-bit on the device: the value must fit
+        auto* b = static_cast<ObjGpuBuffer*>(obj.o);
+        int64_t i = normIndex(*this, wholeNumber(*this, idx, "index"), b->n, "gpu buffer");
+        if (!v.isNum()) panic("a gpu buffer holds numbers, not a " + typeName(v));
+        if (b->floats) {
+            b->fl()[i] = (float)v.num();
+        } else {
+            if (!v.isInt()) panic("a gpu buffer of ints can't hold " + repr(v));
+            if (v.i < INT32_MIN || v.i > INT32_MAX) panic("gpu ints are 32-bit: " + repr(v) + " doesn't fit");
+            b->in()[i] = (int32_t)v.i;
+        }
         return;
     }
     if (isObjType(obj, OT::Vec)) {
@@ -1047,7 +1079,7 @@ bool VM::containsValue(Value c, Value v) {
     if (!c.isObj()) panic("can't use 'in' with a " + typeName(c));
     switch (c.o->type) {
         case OT::List:
-            for (auto& x : as<ObjList>(c)->items)
+            for (Value x : SeqView(*as<ObjList>(c)))
                 if (equals(x, v)) return true;
             return false;
         case OT::Tuple:
@@ -1103,8 +1135,8 @@ bool VM::iterNext(Fiber* f, ObjIterator* it, Value& out) {
     Value src = it->src;
     switch (src.o->type) {
         case OT::List: {
-            auto& items = as<ObjList>(src)->items;
-            out = it->idx < items.size() ? items[it->idx++] : Value::done();
+            auto* l = as<ObjList>(src);
+            out = it->idx < l->len() ? l->get(it->idx++) : Value::done();
             return true;
         }
         case OT::Tuple: {
@@ -1119,7 +1151,7 @@ bool VM::iterNext(Fiber* f, ObjIterator* it, Value& out) {
                 return true;
             }
             size_t n = utf8CharLen((unsigned char)s[it->idx]);
-            out = vstr(s.substr(it->idx, n));
+            out = n == 1 && (unsigned char)s[it->idx] < 0x80 ? charStr((unsigned char)s[it->idx]) : vstr(s.substr(it->idx, n));
             it->idx += n;
             it->cur++;  // characters so far (the position for `for i, c in s`)
             return true;

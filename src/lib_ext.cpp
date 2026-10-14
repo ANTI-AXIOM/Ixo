@@ -477,7 +477,7 @@ static std::string csvCell(const std::string& s, char sep) {
 
 static std::string formatCsv(VM& vm, Value rowsV, char sep) {
     if (!isObjType(rowsV, OT::List)) vm.panic("csv needs a list of rows, got " + vm.typeName(rowsV));
-    auto& rows = as<ObjList>(rowsV)->items;
+    SeqView rows(*as<ObjList>(rowsV));
     std::string out;
     auto line = [&](const std::vector<std::string>& cells) {
         for (size_t i = 0; i < cells.size(); i++) out += (i ? std::string(1, sep) : "") + csvCell(cells[i], sep);
@@ -490,7 +490,7 @@ static std::string formatCsv(VM& vm, Value rowsV, char sep) {
         std::vector<std::string> head;
         for (auto& k : keys) head.push_back(vm.toStr(k));
         line(head);
-        for (auto& r : rows) {
+        for (Value r : rows) {
             if (!isObjType(r, OT::Map)) vm.panic("every row must be a map when the first one is");
             std::vector<std::string> cells;
             for (auto& k : keys) {
@@ -501,13 +501,11 @@ static std::string formatCsv(VM& vm, Value rowsV, char sep) {
         }
         return out;
     }
-    for (auto& r : rows) {
+    for (Value r : rows) {
         std::vector<std::string> cells;
-        const std::vector<Value>* items = isObjType(r, OT::List)    ? &as<ObjList>(r)->items
-                                          : isObjType(r, OT::Tuple) ? &as<ObjTuple>(r)->items
-                                                                    : nullptr;
-        if (!items) vm.panic("a CSV row must be a list, tuple or map, got " + vm.typeName(r));
-        for (auto& c : *items) cells.push_back(c.isNil() ? "" : vm.toStr(c));
+        SeqView items;
+        if (!seqOf(r, items)) vm.panic("a CSV row must be a list, tuple or map, got " + vm.typeName(r));
+        for (Value c : items) cells.push_back(c.isNil() ? "" : vm.toStr(c));
         line(cells);
     }
     return out;
@@ -537,7 +535,7 @@ NATIVE(csv_write) {
 
 NATIVE(os_exec) {
     std::vector<std::string> argv;
-    for (auto& v : vm.argList(a, 0, "os.exec")->items) argv.push_back(vm.toStr(v));
+    for (Value v : SeqView(*vm.argList(a, 0, "os.exec"))) argv.push_back(vm.toStr(v));
     if (argv.empty()) vm.panic("os.exec() needs a command: os.exec([\"git\", \"status\"])");
     std::string input = n > 1 && !a[1].isNil() ? vm.toStr(a[1]) : "";
     std::string cwd = n > 2 && !a[2].isNil() ? vm.argStr(a, 2, "os.exec")->s : "";

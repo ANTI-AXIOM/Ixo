@@ -90,7 +90,7 @@ struct Encoder {
         switch (o->type) {
             case OT::String: n.s = static_cast<ObjString*>(o)->s; break;
             case OT::List:
-                for (auto& x : static_cast<ObjList*>(o)->items) n.items.push_back(enc(x));
+                for (Value x : SeqView(*static_cast<ObjList*>(o))) n.items.push_back(enc(x));
                 break;
             case OT::Tuple:
                 for (auto& x : static_cast<ObjTuple*>(o)->items) n.items.push_back(enc(x));
@@ -363,7 +363,7 @@ struct Decoder {
                 case OT::Class: continue;
                 case OT::String: o = vm.str(nd.s); break;
                 case OT::List: o = vm.alloc<ObjList>(); break;
-                case OT::Tuple: o = vm.alloc<ObjTuple>(); break;
+                case OT::Tuple: o = vm.newTupleN(nd.items.size()); break;
                 case OT::Set: o = vm.alloc<ObjSet>(); break;
                 case OT::Map: o = vm.alloc<ObjMap>(); break;
                 case OT::Range: o = vm.alloc<ObjRange>(nd.n0, nd.n1, nd.n2, nd.flag); break;
@@ -456,10 +456,10 @@ struct Decoder {
                 Obj* o = vals[i].isObj() ? vals[i].o : nullptr;
                 switch (nd.type) {
                     case OT::List:
-                        for (auto& x : nd.items) static_cast<ObjList*>(o)->items.push_back(val(x));
+                        for (auto& x : nd.items) static_cast<ObjList*>(o)->push(val(x));
                         break;
                     case OT::Tuple:
-                        for (auto& x : nd.items) static_cast<ObjTuple*>(o)->items.push_back(val(x));
+                        for (size_t k = 0; k < nd.items.size(); k++) static_cast<ObjTuple*>(o)->items[k] = val(nd.items[k]);
                         break;
                     case OT::Set:
                         for (auto& x : nd.items) static_cast<ObjSet*>(o)->add(val(x));
@@ -726,10 +726,11 @@ ParRuntime* ParRuntime::start(VM& main, int n) {
             auto prog = std::make_unique<Program>();
             VM& vm = prog->vm;
             vm.isWorker = true;
+            vm.jitOn = false;  // workers never compile: no counters shared with the main program
             vm.programArgs = args;
             int ai = vm.builtinIndex("args");
             if (ai >= 0 && isObjType(vm.builtins[ai].value, OT::List))
-                for (auto& a : args) as<ObjList>(vm.builtins[ai].value)->items.push_back(vm.vstr(a));
+                for (auto& a : args) as<ObjList>(vm.builtins[ai].value)->push(vm.vstr(a));
             VM* mainVm = rt->mainVM;
             if (mainVm->profiler) {
                 wp->profiler = std::make_unique<Profiler>();
@@ -889,7 +890,7 @@ void VM::drainInbox() {
             t->shared = msg.task;
             t->fiber = nf;
             nf->task = t;
-            runQueue.push_back(nf);
+            enqueue(nf);
             continue;
         }
         Fiber* f = fiberFor(msg.serial);

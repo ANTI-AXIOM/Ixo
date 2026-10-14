@@ -1,0 +1,71 @@
+# Kernels for tests/tools/wgsl_check.mjs: prints, as JSON, each kernel's WGSL, its
+# inputs and the results Ixo computed (on Vulkan or the CPU fallback). The check
+# runs the WGSL in a browser's WebGPU and compares.
+gpu fn saxpy(a: float, x: buffer[float], y: buffer[float])
+    i = gpu.index
+    if i < y.len -> y[i] = a * x[i] + y[i]
+
+gpu fn arith(out: buffer[int])
+    i = gpu.index
+    a = i - 50
+    out[i] = a // 7 * 1000 + a % 7 * 10 + (a & 5) - (a >> 1) + (1 << (i % 5))
+
+gpu fn loops(out: buffer[int], limit: int, odd: bool)
+    i = gpu.index
+    s = 0
+    k = 0
+    while true
+        k += 1
+        if k > limit -> break
+        if k % 2 == 1 and not odd -> continue
+        s += k
+    for j in 10..0 by -2
+        if j == 4
+            s += 100
+        else
+            s += 1
+    out[i] = s + i
+
+gpu fn mandel(out: buffer[int], w: int, h: int, iters: int)
+    p = gpu.index
+    x0 = float(p % w) / float(w) * 3.5 - 2.5
+    y0 = float(p // w) / float(h) * 2.0 - 1.0
+    x = 0.0
+    y = 0.0
+    k = 0
+    while k < iters and x * x + y * y <= 4.0
+        t = x * x - y * y + x0
+        y = 2.0 * x * y + y0
+        x = t
+        k += 1
+    out[p] = k
+
+gpu fn conv(f: buffer[float], n: buffer[int])
+    i = gpu.index
+    v = float(i) - 2.5
+    f[i] = v.abs + v.floor + min(v, 1.0) + max(i, 2) + 4.0.sqrt + v.abs * 2
+    n[i] = int(v * 3.0) + abs(i - 3) + min(i, 2) + max(-i, -1)
+
+cases = []
+fn add_case(name, kernel, scalars, bufs, n, run)
+    inputs = bufs.map(_.list)
+    run()
+    cases.add({"name": name, "wgsl": gpu.wgsl(kernel), "scalars": scalars,
+               "buffers": bufs.map(fn(b) = {"floats": b.len > 0 and type(b[0]) == "float", "n": b.len}),
+               "inputs": inputs, "threads": n, "expect": bufs.map(_.list)})
+
+xs = []
+for i in 0..256 -> xs.add(i * 0.5)
+x = gpu.floats(xs)
+y = gpu.floats(256)
+add_case("saxpy", saxpy, [2.0], [x, y], 256, fn() = saxpy(2.0, x, y))
+o = gpu.ints(100)
+add_case("arith", arith, [], [o], 100, fn() = arith(o))
+lo = gpu.ints(4)
+add_case("loops", loops, [10, 0], [lo], 4, fn() = loops(lo, 10, false))
+m = gpu.ints(64 * 47)
+add_case("mandel", mandel, [64, 47, 64], [m], 64 * 47, fn() = mandel(m, 64, 47, 64))
+cf = gpu.floats(6)
+cn = gpu.ints(6)
+add_case("conv", conv, [], [cf, cn], 6, fn() = conv(cf, cn))
+print(json.str(cases))

@@ -280,6 +280,12 @@ StmtP Parser::parseStatement() {
         case T::At:
         case T::Dollar: return parseAttributed();
         case T::Ident:
+            if (peek().text == "gpu" && peek(1).kind == T::KwFn && peek(2).kind == T::Ident) {  // gpu fn: a kernel
+                advance();
+                auto f = parseFnDecl({}, false, false);
+                if (f) f->isGpu = true;
+                return f;
+            }
             if (peek(1).kind == T::Star && !peek(1).spaceBefore &&
                 (peek(2).kind == T::Assign || peek(2).kind == T::Colon)) {
                 // limit* = 10: an exported module variable
@@ -351,6 +357,12 @@ StmtP Parser::parseAttributed() {
     if (check(T::KwPar) && peek(1).kind == T::KwFn) {
         advance();
         return parseFnDecl(attrs, false, false, true);
+    }
+    if (check(T::Ident) && peek().text == "gpu" && peek(1).kind == T::KwFn) {  // gpu fn: a kernel
+        advance();
+        auto f = parseFnDecl(attrs, false, false);
+        if (f) f->isGpu = true;
+        return f;
     }
     // $jit for / $jit while: compile the loop right away; other hints are ignored
     StmtP st = parseStatement();

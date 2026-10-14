@@ -39,7 +39,7 @@ double monotonicSeconds() {
 // ------------------------------------------------------------------ fibers
 
 Fiber::Fiber() {
-    cap = 256;
+    cap = 32;  // 512 bytes; grows when needed (thousands of tasks stay small)
     stack = static_cast<Value*>(std::malloc(cap * sizeof(Value)));
 }
 
@@ -63,16 +63,21 @@ static std::atomic<uint64_t> nextFiberSerial{1};
 void rangeLoopInit(VM& vm, Value* v);  // values.cpp
 
 struct JitStats {
-    uint64_t entries = 0, budgetExits = 0;
+    uint64_t entries = 0, budgetExits = 0, compiles = 0, typed = 0, demoted = 0;
+    double compileSeconds = 0;
     std::map<std::pair<ObjFunction*, uint32_t>, uint64_t> exits;  // (function, bytecode offset)
     std::vector<std::pair<ObjFunction*, std::string>> notes;       // gave up, didn't compile
 };
 
 VM::VM() {
-    {  // instances keep their fields right after themselves (see FieldArray)
+    {  // instances keep their fields right after themselves (see FieldArrayAt)
         alignas(16) char mem[sizeof(ObjInstance) + sizeof(Value)];
         auto* t = new (mem) ObjInstance(nullptr, 1);
-        if (reinterpret_cast<char*>(t->fields.data()) != mem + sizeof(ObjInstance)) {
+        alignas(16) char tmem[sizeof(ObjTuple) + sizeof(Value)];
+        auto* tt = tupleInit(tmem, 1);
+        if (reinterpret_cast<char*>(t->fields.data()) != mem + sizeof(ObjInstance) ||
+            reinterpret_cast<char*>(tt->items.data()) != tmem + sizeof(ObjTuple) || sizeof(ObjInstance) != 24 ||
+            sizeof(ObjTuple) != 16) {
             std::fprintf(stderr, "ixo: internal error: unexpected instance layout\n");
             std::abort();
         }
@@ -204,14 +209,14 @@ int VM::moduleIndex(ModuleRt* m) const {
 
 Value VM::newList(std::vector<Value> items) {
     auto* l = alloc<ObjList>();
-    grow(l, items.size() * sizeof(Value));
-    l->items = std::move(items);
+    l->adopt(std::move(items));
+    grow(l, l->len() * l->elemSize());
     return Value::object(l);
 }
 
 Value VM::newTuple(std::vector<Value> items) {
-    auto* t = alloc<ObjTuple>();
-    t->items = std::move(items);
+    ObjTuple* t = newTupleN(items.size());
+    std::copy(items.begin(), items.end(), t->items.begin());
     return Value::object(t);
 }
 
@@ -322,6 +327,7 @@ bool VM::callValue(Fiber* f, Value callee, int argc) {
                 // stopping early most of the time: call it in the interpreter (hot loops still use the machine code)
                 if (!ctx.budgetExit && !ctx.pausedExit && ++jf->jitBails > 50 && jf->jitBails * 2 > jf->jitCalls) {
                     jf->jitState = 4;
+                    jitAllowDirect(jf);
                     if (jitStats) noteJitGiveUp(jf, "calls");
                 }
                 // stopped early: carry on in the interpreter where the machine code was
@@ -653,6 +659,8 @@ void VM::execute(Fiber* f, size_t stopDepth) {
     const uint8_t* ip;
     size_t base;
     const Value* consts;
+    uint8_t* prof = nullptr;
+    const uint8_t* codeBase = nullptr;
 
 #define LOAD()                                                  \
     do {                                                        \
@@ -660,6 +668,14 @@ void VM::execute(Fiber* f, size_t stopDepth) {
         ip = frame->ip;                                         \
         base = frame->base;                                     \
         consts = frame->closure->fn->chunk.consts.data();       \
+        prof = frame->closure->fn->typeSeen.empty() ? nullptr   \
+                                                    : frame->closure->fn->typeSeen.data(); \
+        codeBase = frame->closure->fn->chunk.code.data();       \
+    } while (0)
+// the type of the value just produced (on top), for the optimizing JIT
+#define PROFILE()                                              \
+    do {                                                       \
+        if (prof) prof[ip - codeBase] |= profBit(TOP);         \
     } while (0)
 #define SAVE() (frame->ip = ip)
 #ifdef IXO_CGOTO
@@ -703,7 +719,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 instructionBudget = 0;                                                      \
                 if (stopDepth == 0 && f->nativeDepth == 0 && !runQueue.empty()) {           \
                     f->state = FState::Ready;                                               \
-                    runQueue.push_back(f);                                                  \
+                    enqueue(f);                                                             \
                     return;                                                                 \
                 }                                                                           \
             }                                                                               \
@@ -830,6 +846,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                     panic("'" + as<ObjString>(consts[nm])->s + "' is used before it has a value");
                 }
                 PUSH(v);
+                PROFILE();
                 DISPATCH();
             }
             case OP_SET_UPVAL: {
@@ -854,6 +871,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                     panic("'" + name + "' is used before it has a value");
                 }
                 PUSH(v);
+                PROFILE();
                 DISPATCH();
             }
             TARGET(OP_SET_GLOBAL) {
@@ -1023,12 +1041,12 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                         DISPATCH();
                     }
                     if (src->type == OT::List && !it->pairs) {
-                        auto& items = static_cast<ObjList*>(src)->items;
-                        if (it->idx >= items.size()) {
+                        auto* l = static_cast<ObjList*>(src);
+                        if (it->idx >= l->len()) {
                             ip += off;
                             DISPATCH();
                         }
-                        PUSH(items[it->idx++]);
+                        PUSH(l->get(it->idx++));
                         DISPATCH();
                     }
                     SAVE();
@@ -1171,7 +1189,12 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 if (jitOn) {
                     // a hot loop: continue it in machine code (on-stack replacement)
                     ObjFunction* lf = frame->closure->fn;
-                    if (lf->jitState != 3 && (lf->jitState >= 2 || lf->wantJit || ++lf->hotness >= 2000) &&
+                    if (!prof && lf->jitState == 0 && lf->heapId == heapId) {  // start its type profile
+                        lf->typeSeen.assign(lf->chunk.code.size() + (size_t)lf->arity + 1, 0);
+                        prof = lf->typeSeen.data();
+                    }
+                    if (lf->jitState != 3 &&
+                        (lf->jitState >= 2 || lf->wantJit || (warm && !lf->warmChecked && (warmApply(lf), false)) || ++lf->hotness >= kJitTurns) &&
                         jitReady(f, frame->closure, (int64_t)(ip - lf->chunk.code.data()), (int)(f->sp - base))) {
                         uint32_t at = (uint32_t)(ip - lf->chunk.code.data());
                         auto& heads = lf->jit->loopHeaders;
@@ -1228,6 +1251,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 bool pushed = callValue(f, callee, argc);
                 SUSPEND();
                 if (pushed) LOAD();
+                else PROFILE();
                 SAFEPOINT();
                 DISPATCH();
             }
@@ -1281,6 +1305,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 bool pushed = invoke(f, s, argc, fk, fi, frame->closure);
                 SUSPEND();
                 if (pushed) LOAD();
+                else PROFILE();
                 SAFEPOINT();
                 break;
             }
@@ -1295,6 +1320,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                     InlineCache& c = frame->closure->fn->ic[icx];
                     if (c.clsId == inst->cls->id && c.index >= 0) {
                         TOP = inst->fields[(size_t)c.index];
+                        PROFILE();
                         DISPATCH();
                     }
                     if (op == OP_GET_MEMBER && c.clsId == inst->cls->id && c.index < 0 && isObjType(c.method, OT::Closure)) {
@@ -1310,6 +1336,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                         c.clsId = inst->cls->id;
                         c.index = it->second;
                         TOP = inst->fields[(size_t)it->second];
+                        PROFILE();
                         DISPATCH();
                     }
                     if (op == OP_GET_MEMBER) {
@@ -1333,6 +1360,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 getMember(f, s, fk, fi, frame->closure, op == OP_GET_MEMBER_RAW);
                 SUSPEND();
                 if (f->frames.size() != depthBefore) LOAD();
+                else PROFILE();
                 break;
             }
             case OP_SET_MEMBER: {
@@ -1378,6 +1406,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                     panic("internal: field access on " + typeName(obj));
                 }
                 TOP = as<ObjInstance>(obj)->fields[i];
+                PROFILE();
                 DISPATCH();
             }
             TARGET(OP_SET_FIELD) {
@@ -1392,6 +1421,8 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 Value idx = STK[f->sp - 1], obj = STK[f->sp - 2];
                 STK[f->sp - 2] = getIndex(obj, idx);
                 f->sp--;
+                PROFILE();
+                if (prof && !isObjType(obj, OT::List)) prof[ip - codeBase] |= PB_NOTLIST;
                 break;
             }
             case OP_SET_INDEX: {
@@ -1399,6 +1430,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 Value v = STK[f->sp - 1], idx = STK[f->sp - 2], obj = STK[f->sp - 3];
                 setIndex(obj, idx, v);
                 f->sp -= 3;
+                if (prof && !isObjType(obj, OT::List)) prof[ip - codeBase] |= PB_NOTLIST;
                 break;
             }
             case OP_CLOSURE: {
@@ -1434,6 +1466,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 PUSH(result);
                 if (f->frames.size() == stopDepth) return;
                 LOAD();
+                PROFILE();
                 break;
             }
             case OP_LIST: {
@@ -1514,7 +1547,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
             case OP_LIST_APPEND: {
                 uint16_t s = READ_U16();
                 Value v = POP();
-                as<ObjList>(STK[base + s])->items.push_back(v);
+                as<ObjList>(STK[base + s])->push(v);
                 break;
             }
             case OP_STR_APPEND: {
@@ -1569,6 +1602,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 auto* b = as<ObjString>(TOP);
                 const std::string& lit = as<ObjString>(consts[k])->s;
                 b->s += lit;
+                b->kind = 0;
                 grow(b, lit.size());
                 break;
             }
@@ -1588,13 +1622,14 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 uint32_t off = READ_U32();
                 Value* k = &STK[base + s + 1];
                 if (k->t == VT::Int) {  // a list: the position is in the slot after it
-                    auto& items = as<ObjList>(STK[base + s])->items;
-                    if ((size_t)k->i >= items.size()) {
+                    auto* l = as<ObjList>(STK[base + s]);
+                    if ((size_t)k->i >= l->len()) {
                         ip += off;
                         DISPATCH();
                     }
-                    Value v = items[(size_t)k->i++];
+                    Value v = l->get((size_t)k->i++);
                     PUSH(v);
+                    PROFILE();
                     DISPATCH();
                 }
                 SAVE();
@@ -1711,13 +1746,11 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 uint8_t n = READ_BYTE();
                 SAVE();
                 Value v = POP();
-                std::vector<Value>* items = nullptr;
-                if (isObjType(v, OT::Tuple)) items = &as<ObjTuple>(v)->items;
-                if (isObjType(v, OT::List)) items = &as<ObjList>(v)->items;
-                if (!items) panic("can't unpack a " + typeName(v) + " into " + std::to_string(n) + " variables");
-                if (items->size() != n)
-                    panic("expected " + std::to_string(n) + " values to unpack, got " + std::to_string(items->size()));
-                std::vector<Value> copy = *items;
+                SeqView items;
+                if (!seqOf(v, items)) panic("can't unpack a " + typeName(v) + " into " + std::to_string(n) + " variables");
+                if (items.size() != n)
+                    panic("expected " + std::to_string(n) + " values to unpack, got " + std::to_string(items.size()));
+                std::vector<Value> copy = items.vec();
                 for (auto& x : copy) PUSH(x);
                 break;
             }
@@ -1789,10 +1822,9 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 uint16_t n = READ_U16();
                 Value v = TOP;
                 bool ok = false;
-                const std::vector<Value>* items = nullptr;
-                if (kind == 0 && isObjType(v, OT::List)) items = &as<ObjList>(v)->items;
-                if (kind == 1 && isObjType(v, OT::Tuple)) items = &as<ObjTuple>(v)->items;
-                if (items) ok = cmp == 0 ? items->size() == n : items->size() >= n;
+                SeqView items;
+                bool right = (kind == 0 && isObjType(v, OT::List)) || (kind == 1 && isObjType(v, OT::Tuple));
+                if (right && seqOf(v, items)) ok = cmp == 0 ? items.size() == n : items.size() >= n;
                 TOP = Value::boolean(ok);
                 break;
             }
@@ -1810,15 +1842,15 @@ void VM::execute(Fiber* f, size_t stopDepth) {
             case OP_ELEM: {
                 int16_t i = (int16_t)READ_U16();
                 Value v = TOP;
-                const std::vector<Value>& items =
-                    isObjType(v, OT::List) ? as<ObjList>(v)->items : as<ObjTuple>(v)->items;
+                SeqView items;
+                seqOf(v, items);
                 TOP = items[i >= 0 ? (size_t)i : items.size() + i];
                 break;
             }
             case OP_SLICE_FROM: {
                 uint16_t start = READ_U16();
                 uint16_t fromEnd = READ_U16();
-                auto& items = as<ObjList>(TOP)->items;
+                SeqView items(*as<ObjList>(TOP));
                 std::vector<Value> out(items.begin() + start, items.end() - fromEnd);
                 TOP = newList(std::move(out));
                 break;
@@ -2044,9 +2076,20 @@ Fiber* VM::newFiber() {
     Fiber* f = new Fiber();
     f->id = nextTaskId;
     f->serial = nextFiberSerial.fetch_add(1);
+    f->index = fibers.size();
     fibers.push_back(f);
     fiberBySerial[f->serial] = f;
     return f;
+}
+
+Fiber* VM::sleepTop() {
+    while (!sleepHeap.empty()) {
+        const SleepEntry& e = sleepHeap.top();
+        auto it = fiberBySerial.find(e.serial);
+        if (it != fiberBySerial.end() && it->second->asleep && it->second->sleepGen == e.gen) return it->second;
+        sleepHeap.pop();  // woken, gone, or asleep again with a newer entry
+    }
+    return nullptr;
 }
 
 Fiber* VM::fiberFor(uint64_t serial) {
@@ -2057,9 +2100,15 @@ Fiber* VM::fiberFor(uint64_t serial) {
 void VM::destroyFiber(Fiber* f) {
     closeUpvalues(f, 0);
     if (f->task) f->task->fiber = nullptr;
-    fibers.erase(std::remove(fibers.begin(), fibers.end(), f), fibers.end());
-    runQueue.erase(std::remove(runQueue.begin(), runQueue.end(), f), runQueue.end());
-    sleepers.erase(std::remove(sleepers.begin(), sleepers.end(), f), sleepers.end());
+    if (f->index < fibers.size() && fibers[f->index] == f) {  // swap with the last one
+        fibers[f->index] = fibers.back();
+        fibers[f->index]->index = f->index;
+        fibers.pop_back();
+    } else {
+        fibers.erase(std::remove(fibers.begin(), fibers.end(), f), fibers.end());
+    }
+    if (f->queued) runQueue.erase(std::remove(runQueue.begin(), runQueue.end(), f), runQueue.end());
+    sleepRemove(f);
     fiberBySerial.erase(f->serial);
     delete f;
 }
@@ -2074,7 +2123,7 @@ ObjTask* VM::spawn(Value callee, const Value* args, int argc) {
     nf->task = t;
     nf->world = current ? current->world : nullptr;
     t->fiber = nf;
-    runQueue.push_back(nf);
+    enqueue(nf);
     if (current && !current->groups.empty()) current->groups.back().push_back(t);
     return t;
 }
@@ -2107,8 +2156,8 @@ void VM::wake(Fiber* f, Value result, bool pushResult) {
     f->selectSel.reset();
     if (pushResult) f->push(result);
     f->state = FState::Ready;
-    sleepers.erase(std::remove(sleepers.begin(), sleepers.end(), f), sleepers.end());
-    runQueue.push_back(f);
+    sleepRemove(f);
+    enqueue(f);
 }
 
 void VM::sleepCurrent(double ms, bool pushResult) {
@@ -2120,7 +2169,7 @@ void VM::sleepCurrent(double ms, bool pushResult) {
     f->state = FState::Sleeping;
     f->wakeAt = monotonicSeconds() + ms / 1000.0;
     f->startArgc = pushResult ? -2 : -1;  // -2: push nil when waking
-    sleepers.push_back(f);
+    sleepAdd(f);
 }
 
 void VM::awaitTask(ObjTask* t) {
@@ -2229,7 +2278,7 @@ Value VM::selectRecv(const std::vector<ObjChannel*>& chans, double timeoutMs, bo
         f->startArgc = -1;
         f->selectSel = sel;
         f->selectTimeoutIndex = (int)n;
-        sleepers.push_back(f);
+        sleepAdd(f);
     } else {
         blockCurrent();
     }
@@ -2269,7 +2318,7 @@ void VM::schedule() {
     while (!exitRequested) {
         if (par) drainInbox();
         if (runQueue.empty()) {
-            if (sleepers.empty()) {
+            if (sleeping == 0) {
                 if (!par) break;
                 if (isWorker) {
                     if (par->stopping) break;
@@ -2280,9 +2329,9 @@ void VM::schedule() {
                 if (!par->waitForWork(*this, -1)) break;
                 continue;
             }
-            double next = sleepers[0]->wakeAt;
-            for (Fiber* s : sleepers) next = std::min(next, s->wakeAt);
-            double wait = next - monotonicSeconds();
+            Fiber* first = sleepTop();
+            if (!first) continue;  // (only stale entries were left)
+            double wait = first->wakeAt - monotonicSeconds();
             if (wait > 0) {
                 if (par)
                     par->waitForWork(*this, wait);
@@ -2291,8 +2340,11 @@ void VM::schedule() {
             }
             double now = monotonicSeconds();
             std::vector<Fiber*> due;
-            for (Fiber* s : sleepers)
-                if (s->wakeAt <= now + 1e-6) due.push_back(s);
+            while (Fiber* s = sleepTop()) {
+                if (s->wakeAt > now + 1e-6) break;
+                sleepHeap.pop();
+                due.push_back(s);
+            }
             for (Fiber* s : due) {
                 if (s->selectSel) {
                     // a select's `after`: only if no flow delivered first
@@ -2300,7 +2352,7 @@ void VM::schedule() {
                     if (sel->tryFire())
                         wake(s, selectResult(s->selectTimeoutIndex, Value()), true);
                     else
-                        sleepers.erase(std::remove(sleepers.begin(), sleepers.end(), s), sleepers.end());
+                        sleepRemove(s);
                     continue;
                 }
                 bool push = s->startArgc == -2;
@@ -2311,6 +2363,7 @@ void VM::schedule() {
         }
         Fiber* f = runQueue.front();
         runQueue.pop_front();
+        if (f->queued) f->queued--;
         if (f->state == FState::Done) continue;
         current = f;
         f->state = FState::Running;
@@ -2344,7 +2397,7 @@ bool VM::runCallable(Value callee, Value* result, bool isTest) {
     f->startArgc = 0;
     Fiber* savedMain = mainFiber;
     mainFiber = f;
-    runQueue.push_back(f);
+    enqueue(f);
     bool ok = true;
     try {
         schedule();
@@ -2365,7 +2418,8 @@ bool VM::runCallable(Value callee, Value* result, bool isTest) {
             if (x != f) destroyFiber(x);
         nestedPool.clear();  // those fibers were just destroyed
         runQueue.clear();
-        sleepers.clear();
+        sleepHeap = {};
+        sleeping = 0;
         current = nullptr;
     }
     mainFiber = savedMain;
@@ -2403,38 +2457,86 @@ std::string VM::runTest(Value fn) {
 // still holds pointers into it; it may not wait on flows or tasks.
 // ------------------------------------------------------------------ JIT
 
+bool VM::jitShouldDemote(const ObjFunction* fn) const {
+    if (!fn->jit || !fn->jit->tier2) return false;
+    uint64_t fails = fn->jit->guessFails;
+    return fails > 64 && fails * 16 > (uint64_t)fn->jitCalls + fn->osrEntries;
+}
+
+void VM::jitDemote(ObjFunction* fn, ObjClosure* c) {
+    fn->noTier2 = true;
+    auto code = std::make_unique<JitCode>();
+    std::string why;
+    // (the old code may still be running deeper in the native stack: it's kept)
+    if (jitCompile(fn, c, *code, &why, fn->jitSeeds, this)) {
+        fn->jit = code.release();
+        jitAllowDirect(fn);
+        if (jitStats) jitStats->demoted++;
+        if (std::getenv("IXO_JIT_LOG"))
+            std::fprintf(stderr, "jit: %s compiled again without typed guesses (they kept failing)\n", fn->name.c_str());
+    }
+}
+
 bool VM::jitReady(Fiber* f, ObjClosure* c, int64_t seedAt, int seedDepth) {
     ObjFunction* fn = c->fn;
     if (isWorker || (debugger && !debugger->allowsJit()) || memProfiler || f->world || fn->heapId != heapId) return false;
     bool compiled = fn->jitState == 2 || fn->jitState == 4;
-    bool newSeed = seedAt >= 0 && (!compiled || std::find(fn->jit->loopHeaders.begin(), fn->jit->loopHeaders.end(),
-                                                          (uint32_t)seedAt) == fn->jit->loopHeaders.end());
+    if (compiled && jitShouldDemote(fn)) jitDemote(fn, c);
+    bool newSeed = seedAt >= 0 && (!compiled || fn->jit->relearn ||
+                                   std::find(fn->jit->loopHeaders.begin(), fn->jit->loopHeaders.end(), (uint32_t)seedAt) ==
+                                       fn->jit->loopHeaders.end());
     if (compiled && (!newSeed || fn->jitRecompiles >= 8)) return true;
     if (fn->jitState == 3) return false;
+    if (!compiled) {  // the type profile: what the optimizing JIT will assume
+        if (fn->typeSeen.empty()) fn->typeSeen.assign(fn->chunk.code.size() + (size_t)fn->arity + 1, 0);
+        if (seedAt < 0 && f->sp >= (size_t)fn->arity)
+            for (int k = 0; k < fn->arity; k++)
+                fn->typeSeen[fn->chunk.code.size() + (size_t)k] |= profBit(f->stack[f->sp - (size_t)fn->arity + (size_t)k]);
+    }
     if (fn->noJit) {  // $nojit
         fn->jitState = 3;
+        jitAllowDirect(fn);
         return false;
     }
-    if (!compiled && !fn->wantJit && seedAt < 0 && ++fn->hotness < 200) return false;
-    if (newSeed) {
+    if (!compiled && warm && !fn->warmChecked) warmApply(fn);
+    if (!compiled && !fn->wantJit && seedAt < 0 && ++fn->hotness < kJitCalls) return false;
+    if (newSeed && std::find(fn->jitSeeds.begin(), fn->jitSeeds.end(), std::pair<uint32_t, int>((uint32_t)seedAt, seedDepth)) !=
+                       fn->jitSeeds.end()) {
+        if (compiled) fn->jitRecompiles++;  // already an entry: compiled again for what the interpreter just learned
+        fn->jitSeeds.push_back({(uint32_t)seedAt, seedDepth});
+    } else if (newSeed) {
         fn->jitSeeds.push_back({(uint32_t)seedAt, seedDepth});
         if (compiled) fn->jitRecompiles++;
     }
     static const bool log = std::getenv("IXO_JIT_LOG") != nullptr;
     auto code = std::make_unique<JitCode>();
     std::string why;
-    if (jitCompile(fn, c, *code, &why, fn->jitSeeds, this)) {
+    double t0 = monotonicSeconds();
+    bool ok = jitCompile(fn, c, *code, &why, fn->jitSeeds, this);
+    double took = monotonicSeconds() - t0;
+    if (jitStats) {
+        jitStats->compiles++;
+        jitStats->compileSeconds += took;
+    }
+    if (ok) {
         // (old machine code isn't running now: the interpreter is; it's kept, being small)
         fn->jit = code.release();
         fn->jitState = 2;
-        if (log) std::fprintf(stderr, "jit: compiled %s\n", fn->name.c_str());
+        jitAllowDirect(fn);
+        if (jitStats && fn->jit->tier2) jitStats->typed++;
+        if (log)
+            std::fprintf(stderr, "jit: compiled %s in %.0f us (%s%s)\n", fn->name.c_str(), took * 1e6,
+                         seedAt >= 0 ? "a hot loop" : fn->wantJit ? "$jit" : "called often",
+                         fn->jit->tier2 ? ", typed" : "");
         return true;
     }
     if (compiled) {  // a new entry point didn't work out: keep the code we have
+        if (log) std::fprintf(stderr, "jit: %s keeps its code (a new loop entry didn't compile: it %s)\n", fn->name.c_str(), why.c_str());
         fn->jitSeeds.pop_back();
         return true;
     }
     fn->jitState = 3;
+    jitAllowDirect(fn);
     if (jitStats) jitStats->notes.push_back({fn, "isn't compiled: it " + why});
     if (log || fn->wantJit) {
         flushOut();
@@ -2452,14 +2554,24 @@ bool VM::jitTry(ObjClosure* c) {
     // called from machine code: the caller is hot, so compile right away
     auto code = std::make_unique<JitCode>();
     std::string why;
-    if (jitCompile(fn, c, *code, &why, fn->jitSeeds, this)) {
+    double t0 = monotonicSeconds();
+    bool ok = jitCompile(fn, c, *code, &why, fn->jitSeeds, this);
+    double took = monotonicSeconds() - t0;
+    if (jitStats) {
+        jitStats->compiles++;
+        jitStats->compileSeconds += took;
+    }
+    if (ok) {
         fn->jit = code.release();
         fn->jitState = 2;
+        jitAllowDirect(fn);
+        if (jitStats && fn->jit->tier2) jitStats->typed++;
         static const bool log = std::getenv("IXO_JIT_LOG") != nullptr;
-        if (log) std::fprintf(stderr, "jit: compiled %s\n", fn->name.c_str());
+        if (log) std::fprintf(stderr, "jit: compiled %s in %.0f us (called from machine code)\n", fn->name.c_str(), took * 1e6);
         return true;
     }
     fn->jitState = 3;
+    jitAllowDirect(fn);
     if (jitStats) jitStats->notes.push_back({fn, "isn't compiled: it " + why});
     if (std::getenv("IXO_JIT_LOG")) std::fprintf(stderr, "jit: %s stays interpreted (it %s)\n", fn->name.c_str(), why.c_str());
     return false;
@@ -2485,6 +2597,14 @@ void VM::printJitStats() {
     for (auto& [k, n] : s.exits) total += n;
     std::fprintf(stderr, "\n-- jit: entered machine code %llu times; it handed over to the interpreter %llu times --\n",
                  (unsigned long long)s.entries, (unsigned long long)total);
+    std::fprintf(stderr, "  compiled %llu time%s in %.2f ms\n", (unsigned long long)s.compiles, s.compiles == 1 ? "" : "s",
+                 s.compileSeconds * 1000);
+    if (s.typed || s.demoted)
+        std::fprintf(stderr, "  %llu with typed code (values in registers), %llu compiled again without it\n",
+                     (unsigned long long)s.typed, (unsigned long long)s.demoted);
+    if (warm)
+        std::fprintf(stderr, "  warm start: %llu function%s known from earlier runs\n", (unsigned long long)warm->hits,
+                     warm->hits == 1 ? "" : "s");
     if (s.budgetExits)
         std::fprintf(stderr, "  %10llu  to let other tasks run (normal)\n", (unsigned long long)s.budgetExits);
     std::vector<std::pair<uint64_t, std::pair<ObjFunction*, uint32_t>>> v;
@@ -2706,7 +2826,7 @@ int VM::jitFastOp(JitCtx& ctx, Value* frameBase, JitOpSite& s) {
                 top[-(int)n] = vstr(std::move(out));
                 break;
             }
-            case OP_LIST_APPEND: as<ObjList>(frameBase[u16(1)])->items.push_back(top[-1]); break;
+            case OP_LIST_APPEND: as<ObjList>(frameBase[u16(1)])->push(top[-1]); break;
             case OP_STR_APPEND: strAppend(frameBase[u16(1)], top[-1], at[3] != 0, 1); break;
             case OP_STR_APPEND_G: strAppend(fn->module->globals[u16(1)], top[-1], at[3] != 0, 2); break;
             case OP_STR_SEAL: {
@@ -2738,6 +2858,7 @@ int VM::jitFastOp(JitCtx& ctx, Value* frameBase, JitOpSite& s) {
                 auto* b = as<ObjString>(top[-1]);
                 const std::string& lit = as<ObjString>(fn->chunk.consts[u16(1)])->s;
                 b->s += lit;
+                b->kind = 0;
                 grow(b, lit.size());
                 break;
             }
@@ -2779,9 +2900,9 @@ int VM::iterStep(Fiber* f, ObjIterator* it, Value& out) {
         return 0;
     }
     if (src->type == OT::List && !it->pairs) {
-        auto& items = static_cast<ObjList*>(src)->items;
-        if (it->idx >= items.size()) return 1;
-        out = items[it->idx++];
+        auto* l = static_cast<ObjList*>(src);
+        if (it->idx >= l->len()) return 1;
+        out = l->get(it->idx++);
         return 0;
     }
     if (!iterNext(f, it, out)) {
@@ -2798,6 +2919,8 @@ void VM::strAppend(Value& local, Value x, bool plainAdd, uint8_t owner) {
         auto* cur = as<ObjString>(local);
         const std::string& add = as<ObjString>(x)->s;
         if (cur->appendable == owner) {
+            if (cur->kind == 1 && !VM::ascii(as<ObjString>(x))) cur->kind = 2;
+            else if (cur->kind != 1) cur->kind = 0;
             cur->s += add;
             cur->hashv = 0;
             grow(cur, add.size());
@@ -2820,6 +2943,7 @@ void VM::strAppend(Value& local, Value x, bool plainAdd, uint8_t owner) {
 void VM::fstrAdd(Value builder, Value v, uint16_t spec, const Value* consts) {
     auto* b = as<ObjString>(builder);
     size_t before = b->s.size();
+    b->kind = 0;
     if (spec != 0xFFFF)
         b->s += formatValue(v, as<ObjString>(consts[spec])->s);
     else if (isObjType(v, OT::String))
@@ -2875,7 +2999,7 @@ bool VM::runJit(Fiber* f, ObjFunction* fn, size_t base, uint64_t entry, JitCtx& 
     ctx.pausedExit = 0;
     ctx.chainCap = (int64_t)jitChain.size();
     // room for recursion up to that depth, so it doesn't keep stopping for stack space
-    size_t want = base + (size_t)jc.maxDepth * (size_t)(ctx.maxDepth + 1) + 64;
+    size_t want = base + (size_t)jc.maxDepth * (size_t)(ctx.maxDepth + 1) + 8;
     while (f->cap < want) f->grow();
     ctx.stackEnd = f->stack + f->cap;
     ctx.depth = 0;
@@ -3001,7 +3125,8 @@ void VM::blacken(Obj* o) {
     switch (o->type) {
         case OT::String: break;
         case OT::List:
-            for (auto& v : static_cast<ObjList*>(o)->items) markValue(v);
+            if (!static_cast<ObjList*>(o)->typed())
+                for (auto& v : static_cast<ObjList*>(o)->vals) markValue(v);
             break;
         case OT::Tuple:
             for (auto& v : static_cast<ObjTuple*>(o)->items) markValue(v);
@@ -3100,6 +3225,7 @@ void VM::markRoots() {
     markValue(mainResult);
     markValue(lastResult);
     for (auto& v : extraRoots) markValue(v);
+    for (ObjString* c : asciiChars) markObject(c);
 }
 
 void VM::traceGray() {
@@ -3187,6 +3313,7 @@ std::string VM::typeNameOf(OT t) {
         case OT::Mat: return "mat";
         case OT::Quat: return "quat";
         case OT::Rng: return "rng";
+        case OT::GpuBuffer: return "gpu buffer";
         case OT::Time: return "time";
         case OT::TypeDesc: return "type";
         case OT::Marker: return "region marker";
@@ -3250,7 +3377,7 @@ void VM::collectGarbage() {
     // objects again would be wasted work. A big heap (over 32 MB live) grows by
     // half instead, so garbage doesn't pile up to the size of the live data.
     size_t growth = live > ((size_t)32 << 20)
-                        ? live / 2
+                        ? (live > ((size_t)64 << 20) ? live / 3 : live / 2)
                         : (freed * 4 < kept ? std::min<size_t>(live * 3, live + ((size_t)64 << 20)) : live);
     nextGC = std::max<size_t>(live + std::min<size_t>(growth, (size_t)1 << 30), 4 * 1024 * 1024);
     if (stats)

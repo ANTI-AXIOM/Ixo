@@ -1,0 +1,11 @@
+# functions passed around and called through a variable
+fn apply_all(f, n)
+    t = 0
+    for i in 0..n -> t += f(i)
+    t
+fn run(n)
+    k = 3
+    add_k = fn(x) = x + k
+    sq = fn(x) = x * x % 1000
+    print(apply_all(add_k, n), apply_all(sq, n))
+run(5_000_000)

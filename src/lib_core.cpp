@@ -54,6 +54,7 @@ void registerAllBuiltins(VM& vm) {
     registerConcurrency(vm);
     registerExt(vm);
     registerNet(vm);
+    registerGpu(vm);
 }
 
 // ------------------------------------------------------------------ globals
@@ -199,7 +200,7 @@ static std::string firstDifference(VM& vm, Value a, Value b, const std::string& 
         return "\n  strings differ" + at(path) + " on line " + std::to_string(line) + ", column " + std::to_string(col) +
                ":\n    left:  " + clip(lineAt(x, i)) + "\n    right: " + clip(lineAt(y, i));
     }
-    auto seq = [&](const std::vector<Value>& x, const std::vector<Value>& y) -> std::string {
+    auto seq = [&](SeqView x, SeqView y) -> std::string {
         for (size_t i = 0; i < x.size() && i < y.size(); i++)
             if (!vm.equals(x[i], y[i])) {
                 std::string p = path + "[" + std::to_string(i) + "]";
@@ -213,7 +214,7 @@ static std::string firstDifference(VM& vm, Value a, Value b, const std::string& 
                                         : " (right has extra " + clip(vm.repr(y[x.size()])) + ")");
         return "";
     };
-    if (isObjType(a, OT::List) && isObjType(b, OT::List)) return seq(as<ObjList>(a)->items, as<ObjList>(b)->items);
+    if (isObjType(a, OT::List) && isObjType(b, OT::List)) return seq(SeqView(*as<ObjList>(a)), SeqView(*as<ObjList>(b)));
     if (isObjType(a, OT::Tuple) && isObjType(b, OT::Tuple)) return seq(as<ObjTuple>(a)->items, as<ObjTuple>(b)->items);
     if (isObjType(a, OT::Map) && isObjType(b, OT::Map)) {
         auto* x = as<ObjMap>(a);
@@ -411,7 +412,10 @@ NATIVE(m_hex) {
 
 static const std::string& S(Value v) { return as<ObjString>(v)->s; }
 
-NATIVE(s_len) { return Value::integer((int64_t)utf8Length(S(a[0]))); }
+NATIVE(s_len) {
+    auto* s = as<ObjString>(a[0]);
+    return Value::integer((int64_t)(VM::ascii(s) ? s->s.size() : utf8Length(s->s)));
+}
 NATIVE(s_up) {
     std::string s = S(a[0]);
     for (auto& c : s) c = (char)std::toupper((unsigned char)c);
@@ -475,9 +479,10 @@ NATIVE(s_cut) {
 NATIVE(s_join) {
     ObjList* l = vm.argList(a, 1, "join");
     std::string out;
-    for (size_t i = 0; i < l->items.size(); i++) {
+    size_t n2 = l->len();
+    for (size_t i = 0; i < n2; i++) {  // any kind, without widening
         if (i) out += S(a[0]);
-        out += vm.toStr(l->items[i]);
+        out += vm.toStr(l->get(i));
     }
     return vm.vstr(out);
 }
@@ -496,6 +501,7 @@ NATIVE(s_find) {
     const std::string& s = S(a[0]);
     size_t p = s.find(vm.argStr(a, 1, "find")->s);
     if (p == std::string::npos) return Value();
+    if (VM::ascii(as<ObjString>(a[0]))) return Value::integer((int64_t)p);
     return Value::integer((int64_t)utf8Length(s.substr(0, p)));
 }
 NATIVE(s_count) {
@@ -585,19 +591,18 @@ NATIVE(s_is_space) {
 }
 NATIVE(s_slice) {
     const std::string& s = S(a[0]);
-    int64_t len = (int64_t)utf8Length(s);
+    bool asc = VM::ascii(as<ObjString>(a[0]));
+    int64_t len = (int64_t)(asc ? s.size() : utf8Length(s));
     int64_t lo = vm.argInt(a, 1, "slice");
     int64_t hi = n > 2 ? vm.argInt(a, 2, "slice") : len;
-    Value r = makeRange(vm, Value::integer(lo), Value::integer(hi), Value::integer(1), false);
-    Value str = a[0];
-    // reuse indexing semantics
-    (void)str;
-    std::string out;
     if (lo < 0) lo += len;
     if (hi < 0) hi += len;
     lo = std::clamp<int64_t>(lo, 0, len);
     hi = std::clamp<int64_t>(hi, lo, len);
-    (void)r;
+    if (asc) {
+        if (hi - lo == 1) return vm.charStr((unsigned char)s[(size_t)lo]);
+        return vm.vstr(s.substr((size_t)lo, (size_t)(hi - lo)));
+    }
     size_t i = 0, cp = 0, bstart = s.size(), bend = s.size();
     for (; i <= s.size(); i++) {
         if (i == s.size() || ((unsigned char)s[i] & 0xC0) != 0x80) {
@@ -618,7 +623,7 @@ NATIVE(s_pad) {
     int64_t w = vm.argInt(a, 1, "pad");
     std::string fill = n > 2 ? vm.argStr(a, 2, "pad")->s : " ";
     if (fill.empty()) fill = " ";
-    int64_t len = (int64_t)utf8Length(s);
+    int64_t len = (int64_t)(VM::ascii(as<ObjString>(a[0])) ? s.size() : utf8Length(s));
     int64_t target = w < 0 ? -w : w;
     std::string pad;
     for (int64_t i = len; i < target; i++) pad += fill;

@@ -1,0 +1,20 @@
+# C = A * B for 512 x 512 floats: plain Ixo loops (64-bit floats, one core)
+fn matmul(a, b, c, n)
+    for r in 0..n
+        for k in 0..n
+            s = 0.0
+            for j in 0..n -> s += a[r * n + j] * b[j * n + k]
+            c[r * n + k] = s
+
+n = 512
+a = []
+b = []
+for p in 0..n * n
+    a.add(p % 7 - 3.0)
+    b.add(p % 5 * 0.5)
+c = [0.0] * (n * n)
+t0 = clock()
+matmul(a, b, c, n)
+t = clock() - t0
+print(c[0], c[n * n - 1], c.sum)
+print(f"time {t}")

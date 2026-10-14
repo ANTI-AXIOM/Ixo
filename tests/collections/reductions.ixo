@@ -1,0 +1,28 @@
+# Whole-list operations on packed lists give exactly what the item-by-item versions give.
+ints: list = []
+for i in 0..1000 -> ints.add(i * 7919 % 1009 - 500)
+print(ints.sum, ints.min, ints.max)                  # expect: 4678 -500 508
+t = 0
+lo = 1000
+hi = -1000
+for x in ints
+    t += x
+    if x < lo -> lo = x
+    if x > hi -> hi = x
+print(t == ints.sum, lo == ints.min, hi == ints.max)  # expect: true true true
+print(ints.has(508), ints.has(509), ints.has(508.0), ints.has(508.5), ints.has("508"))  # expect: true false true false false
+print(ints.find(-500), ints.find(1000), ints.find(-500.0))  # expect: 0 nil 0
+fs: list = [0.5, -2.25, 1e300, -1e300, 3.0]
+print(fs.sum, fs.min, fs.max, fs.has(3), fs.find(-2.25))  # expect: 3.0 -1e+300 1e+300 true 1
+nan = 0.0 / 0.0
+odd = [1.0, nan, -1.0]
+print(odd.has(nan), odd.min, odd.max)                # expect: false -1.0 1.0
+fast = []
+for i in 0..10000 -> fast.add(i * 0.25)
+print(fast.sum, fast.sum_fast, [1, 2, 3].sum_fast)   # expect: 12498750.0 12498750.0 6
+bs: list = [true, false, true]
+print(bs.has(false), bs.find(false), bs.has(0))      # expect: true 1 false
+print([].sum, [].min, [].max, [].has(1), [].find(1)) # expect: 0 nil nil false nil
+big = [9_000_000_000_000_000_000, 9_000_000_000_000_000_000]
+print(big.sum)                                       # expect: -446744073709551616
+print(os.cpu["cores"] > 0, os.cpu["simd"].len > 0)   # expect: true true

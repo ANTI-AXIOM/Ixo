@@ -77,6 +77,15 @@ struct JitCode {
     std::vector<std::shared_ptr<void>> keep;  // data the code points to (call sites)
     // For the profiler: (machine code offset, bytecode offset), by machine code offset.
     std::vector<std::pair<uint32_t, uint32_t>> pcMap;
+    // The typed tier: values in registers, by types partly guessed from the
+    // interpreter's profile. Wrong guesses hand over to the interpreter and are
+    // counted; too many and the function is compiled again without guessing.
+    bool tier2 = false;
+    uint64_t guessFails = 0;
+    // loops the interpreter never ran before this was compiled: the first time
+    // in, they go back to it once, to learn their types (then are compiled again)
+    std::unique_ptr<uint8_t[]> learned;
+    uint8_t relearn = 0;  // set when one did: compile again at the next loop entry
 };
 
 bool jitSupported();  // this CPU/OS can run the generated code

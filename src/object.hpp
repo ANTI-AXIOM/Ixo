@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <deque>
+#include <iterator>
 #include <memory>
 #include <random>
 #include <unordered_map>
@@ -21,13 +22,14 @@ enum class OT : uint8_t {
     Range, Error, Channel, Task, Module, Namespace, Iterator, Vec, Mat, Quat, Rng, Time, TypeDesc,
     Marker,  // internal: start of a memory region
     Interface,
+    GpuBuffer,
     Free,    // internal: an empty slot in the VM's object pool
 };
 
 // Tags used for per-type method tables and type patterns.
 enum class Tag : uint8_t {
     Nil, Bool, Int, Float, Str, List, Tuple, Map, Set, Range, Fn, Class, Instance, Error, Flow,
-    Task, Module, Vec, Mat, Quat, Rng, Time, Iter, COUNT
+    Task, Module, Vec, Mat, Quat, Rng, Time, Iter, GpuBuf, COUNT
 };
 
 // Frozen values (freeze(x)) belong to no heap: no GC marks or frees them, and
@@ -45,6 +47,9 @@ struct Obj {
     // Strings: who may grow it in place (seen by no one else yet): 0 nobody, 1 the loop
     // that made it (STR_APPEND), 2 the module variable that holds it (STR_APPEND_G).
     uint8_t appendable = 0;
+    // Per type: strings remember whether they are ASCII (0 not known yet, 1 ASCII,
+    // 2 not), which makes length, indexing and slicing O(1) for them.
+    mutable uint8_t kind = 0;
     uint32_t size = 0;    // approximate bytes, for GC pacing
     explicit Obj(OT t) : type(t) {}
 };
@@ -73,15 +78,191 @@ struct ObjString : Obj {
     }
 };
 
+// A list stores its items in the narrowest form that fits all of them (its kind,
+// in the header byte): bools 1 byte, ints 8, floats 8, anything else as 16-byte
+// values. A value that doesn't fit turns the list into `values` once, for good.
+// Every kind is a std::vector of its element type (the same three pointers), so
+// machine code only needs the kind to know the element size.
+enum ListKind : uint8_t { LK_VALUES = 0, LK_BOOLS = 1, LK_INTS = 2, LK_FLOATS = 3, LK_EMPTY = 4 };
+
 struct ObjList : Obj {
-    std::vector<Value> items;
-    ObjList() : Obj(OT::List) {}
+    union {
+        std::vector<Value> vals;   // LK_VALUES and LK_EMPTY (no kind chosen yet)
+        std::vector<uint8_t> bools;
+        std::vector<int64_t> ints;
+        std::vector<double> floats;
+    };
+    ObjList() : Obj(OT::List) {
+        new (&vals) std::vector<Value>();
+        kind = LK_EMPTY;
+    }
+    ~ObjList() { destroyStore(); }
+    ObjList(const ObjList&) = delete;
+    ListKind lk() const { return (ListKind)kind; }
+    bool typed() const { return kind >= LK_BOOLS && kind <= LK_FLOATS; }
+    size_t len() const {
+        switch (kind) {
+            case LK_BOOLS: return bools.size();
+            case LK_INTS: return ints.size();
+            case LK_FLOATS: return floats.size();
+            default: return vals.size();
+        }
+    }
+    size_t elemSize() const { return kind == LK_BOOLS ? 1 : (kind == LK_INTS || kind == LK_FLOATS) ? 8 : sizeof(Value); }
+    Value get(size_t i) const {
+        switch (kind) {
+            case LK_BOOLS: return Value::boolean(bools[i] != 0);
+            case LK_INTS: return Value::integer(ints[i]);
+            case LK_FLOATS: return Value::number(floats[i]);
+            default: return vals[i];
+        }
+    }
+    // the kind a single value would make an empty list
+    static ListKind kindFor(const Value& v) {
+        return v.t == VT::Bool ? LK_BOOLS : v.t == VT::Int ? LK_INTS : v.t == VT::Float ? LK_FLOATS : LK_VALUES;
+    }
+    bool fits(const Value& v) const {
+        switch (kind) {
+            case LK_BOOLS: return v.t == VT::Bool;
+            case LK_INTS: return v.t == VT::Int;
+            case LK_FLOATS: return v.t == VT::Float;
+            default: return true;
+        }
+    }
+    void set(size_t i, const Value& v) {
+        if (!fits(v)) widen();
+        switch (kind) {
+            case LK_BOOLS: bools[i] = v.b ? 1 : 0; break;
+            case LK_INTS: ints[i] = v.i; break;
+            case LK_FLOATS: floats[i] = v.f; break;
+            default: vals[i] = v; break;
+        }
+    }
+    void push(const Value& v) {
+        if (kind == LK_EMPTY && vals.empty()) become(kindFor(v));
+        if (!fits(v)) widen();
+        switch (kind) {
+            case LK_BOOLS: bools.push_back(v.b ? 1 : 0); break;
+            case LK_INTS: ints.push_back(v.i); break;
+            case LK_FLOATS: floats.push_back(v.f); break;
+            default: vals.push_back(v); break;
+        }
+    }
+    Value pop() {
+        Value v = get(len() - 1);
+        switch (kind) {
+            case LK_BOOLS: bools.pop_back(); break;
+            case LK_INTS: ints.pop_back(); break;
+            case LK_FLOATS: floats.pop_back(); break;
+            default: vals.pop_back(); break;
+        }
+        return v;
+    }
+    void reserve(size_t n) {
+        switch (kind) {
+            case LK_BOOLS: bools.reserve(n); break;
+            case LK_INTS: ints.reserve(n); break;
+            case LK_FLOATS: floats.reserve(n); break;
+            default: vals.reserve(n); break;
+        }
+    }
+    size_t capacity() const {
+        switch (kind) {
+            case LK_BOOLS: return bools.capacity();
+            case LK_INTS: return ints.capacity();
+            case LK_FLOATS: return floats.capacity();
+            default: return vals.capacity();
+        }
+    }
+    void shrinkToFit() {
+        switch (kind) {
+            case LK_BOOLS: bools.shrink_to_fit(); break;
+            case LK_INTS: ints.shrink_to_fit(); break;
+            case LK_FLOATS: floats.shrink_to_fit(); break;
+            default: vals.shrink_to_fit(); break;
+        }
+    }
+    void clear() {  // and its memory
+        destroyStore();
+        new (&vals) std::vector<Value>();
+        kind = LK_EMPTY;
+    }
+    // Takes items, choosing the narrowest kind that fits them all.
+    void adopt(std::vector<Value>&& v) {
+        ListKind k = v.empty() ? LK_EMPTY : kindFor(v[0]);
+        for (size_t i = 1; i < v.size() && k != LK_VALUES; i++)
+            if (kindFor(v[i]) != k) k = LK_VALUES;
+        destroyStore();
+        new (&vals) std::vector<Value>();
+        kind = k == LK_EMPTY ? LK_EMPTY : LK_VALUES;
+        if (k == LK_VALUES || k == LK_EMPTY) {
+            vals = std::move(v);
+            return;
+        }
+        become(k);
+        reserve(v.size());
+        for (auto& x : v) push(x);
+    }
+    // This (new, empty) list becomes `times` copies of src, at src's kind.
+    void assignRepeat(const ObjList& src, size_t times) {
+        auto rep = [&](auto& dst, const auto& from) {
+            dst.reserve(from.size() * times);
+            if (from.size() == 1) dst.assign(times, from[0]);
+            else
+                for (size_t t = 0; t < times; t++) dst.insert(dst.end(), from.begin(), from.end());
+        };
+        become(src.lk() == LK_EMPTY || !times ? LK_EMPTY : src.lk());
+        switch (kind) {
+            case LK_BOOLS: rep(bools, src.bools); break;
+            case LK_INTS: rep(ints, src.ints); break;
+            case LK_FLOATS: rep(floats, src.floats); break;
+            case LK_EMPTY: break;
+            default: rep(vals, src.vals); break;
+        }
+    }
+    // Every item as a 16-byte value: what code that wants a std::vector<Value> gets.
+    // A typed list turns into `values` for good, so references stay valid.
+    std::vector<Value>& items() {
+        if (kind != LK_VALUES) widen();
+        return vals;
+    }
+    void widen() {
+        if (kind == LK_VALUES) return;
+        if (kind == LK_EMPTY) {
+            kind = LK_VALUES;
+            return;
+        }
+        std::vector<Value> out;
+        out.reserve(len());
+        for (size_t i = 0; i < len(); i++) out.push_back(get(i));
+        destroyStore();
+        new (&vals) std::vector<Value>(std::move(out));
+        kind = LK_VALUES;
+    }
+
+private:
+    // an empty list takes kind k
+    void become(ListKind k) {
+        destroyStore();
+        switch (k) {
+            case LK_BOOLS: new (&bools) std::vector<uint8_t>(); break;
+            case LK_INTS: new (&ints) std::vector<int64_t>(); break;
+            case LK_FLOATS: new (&floats) std::vector<double>(); break;
+            default: new (&vals) std::vector<Value>(); break;
+        }
+        kind = k;
+    }
+    void destroyStore() {
+        switch (kind) {
+            case LK_BOOLS: bools.~vector(); break;
+            case LK_INTS: ints.~vector(); break;
+            case LK_FLOATS: floats.~vector(); break;
+            default: vals.~vector(); break;
+        }
+    }
 };
 
-struct ObjTuple : Obj {
-    std::vector<Value> items;
-    ObjTuple() : Obj(OT::Tuple) {}
-};
+// (tuples: see ObjTuple below, next to FieldArrayAt)
 
 // Hashing / equality for map keys and set elements (1 and 1.0 are the same key).
 size_t hashValue(const Value& v);
@@ -108,7 +289,17 @@ struct KeyIndex {
         table.clear();
         filled = 0;
     }
-    static uint32_t hashOf(const Value& k) { return (uint32_t)(hashValue(k) * 0x9E3779B97F4A7C15ull >> 32); }
+    // As Python's dict: the key's own hash (an int is itself), so nearby keys sit in
+    // nearby slots, and a probe sequence that mixes in the hash's high bits, so keys
+    // that differ only there (multiples of 1024...) don't pile up.
+    static uint32_t hashOf(const Value& k) {
+        uint64_t x = hashValue(k);
+        return (uint32_t)(x ^ (x >> 32));
+    }
+    static size_t nextSlot(size_t i, uint32_t& perturb, size_t mask) {
+        perturb >>= 5;
+        return (i * 5 + 1 + perturb) & mask;
+    }
     // The position of k, or -1. keyAt(pos) gives the key stored at a position.
     template <class KeyAt>
     int64_t find(const Value& k, size_t n, KeyAt keyAt) const {
@@ -117,9 +308,9 @@ struct KeyIndex {
                 if (keyEquals(keyAt(i), k)) return (int64_t)i;
             return -1;
         }
-        uint32_t h = hashOf(k);
+        uint32_t h = hashOf(k), perturb = h;
         size_t mask = table.size() - 1;
-        for (size_t i = h & mask;; i = (i + 1) & mask) {
+        for (size_t i = h & mask;; i = nextSlot(i, perturb, mask)) {
             uint64_t e = table[i];
             if (e == 0) return -1;
             if (e != 1 && (uint32_t)(e >> 32) == h) {
@@ -144,9 +335,9 @@ struct KeyIndex {
     }
     void removed(const Value& k, size_t pos) {
         if (!active()) return;
-        uint32_t h = hashOf(k);
+        uint32_t h = hashOf(k), perturb = h;
         size_t mask = table.size() - 1;
-        for (size_t i = h & mask;; i = (i + 1) & mask) {
+        for (size_t i = h & mask;; i = nextSlot(i, perturb, mask)) {
             uint64_t e = table[i];
             if (e == 0) return;
             if (e != 1 && (size_t)(uint32_t)e - 2 == pos) {
@@ -177,7 +368,8 @@ private:
     void place(uint32_t h, size_t pos) {
         size_t mask = table.size() - 1;
         size_t i = h & mask;
-        while (table[i] > 1) i = (i + 1) & mask;
+        uint32_t perturb = h;
+        while (table[i] > 1) i = nextSlot(i, perturb, mask);
         if (table[i] == 0) filled++;
         table[i] = ((uint64_t)h << 32) | (uint64_t)(pos + 2);
     }
@@ -315,7 +507,8 @@ struct ObjFunction : Obj {
     // JIT (code after an instruction it doesn't compile is reached from these).
     std::vector<std::pair<uint32_t, int>> jitSeeds;
     uint8_t jitRecompiles = 0;
-    bool wantJit = false;          // $jit: compile on the first call
+    bool wantJit = false;          // $jit (or warm start): compile on the first call
+    bool warmChecked = false;      // looked up in the warm-start profile
     bool noJit = false;            // $nojit: always interpreted
     bool autoCall = false;         // declared without a parameter list: obj.name calls it
     // A comparator lambda of the form `_a < _b`, `_b > _a`, `_a.age <= _b.age`: sort
@@ -323,7 +516,18 @@ struct ObjFunction : Obj {
     int8_t cmpOp = -1;
     bool cmpSwap = false;  // the second parameter is on the left (_b < _a)
     int cmpField = -1;     // compare this field of both (a symbol), -1: the values themselves
+    int keyField = -1;     // a lambda `_.age`: it only reads this field of its argument (sort_by reads it directly)
+    int gpuKernel = -1;    // a gpu fn's launcher: the kernel it runs (gpu.hpp)
     uint32_t hotness = 0;          // calls + loop iterations, until it's compiled
+    // Type profile for the optimizing JIT (main VM only, filled while interpreted):
+    // for each instruction that produces a value whose type the code doesn't fix
+    // (a field, an item, a call's result...), the kinds of values seen, at the
+    // offset of the instruction after it. Then one byte per parameter. See profBit.
+    std::vector<uint8_t> typeSeen;
+    bool noTier2 = false;          // its typed machine code kept failing its guesses
+    // machine code may call this one's machine code directly (compiled, a plain function:
+    // not a task, not a method using captured variables); kept by jitAllowDirect
+    uint8_t jitDirect = 0;
     struct JitCode* jit = nullptr;
     std::vector<std::string> upvalueNames;
     ObjFunction() : Obj(OT::Function) {}
@@ -378,12 +582,15 @@ struct ObjClass : Obj {
 };
 
 // An instance's fields: stored right after the instance, in the same memory
-// (a class's field count never changes). It is the instance's last member, so
-// the values start right after it, at sizeof(ObjInstance): no pointer needed.
-struct FieldArray {
-    size_t n = 0;
-    Value* data() { return reinterpret_cast<Value*>(this + 1); }
-    const Value* data() const { return reinterpret_cast<const Value*>(this + 1); }
+// (a class's field count never changes), so no pointer is needed. The count sits
+// in the 4 bytes after the 12-byte header that alignment would leave empty, and
+// the values start Off bytes after it, at sizeof(the object).
+// Tuples (fixed size too) store their items the same way.
+template <size_t Off>
+struct FieldArrayAt {
+    uint32_t n = 0;
+    Value* data() { return reinterpret_cast<Value*>(reinterpret_cast<char*>(this) + Off); }
+    const Value* data() const { return reinterpret_cast<const Value*>(reinterpret_cast<const char*>(this) + Off); }
     Value& operator[](size_t i) { return data()[i]; }
     const Value& operator[](size_t i) const { return data()[i]; }
     size_t size() const { return n; }
@@ -393,12 +600,80 @@ struct FieldArray {
     const Value* begin() const { return data(); }
     const Value* end() const { return data() + n; }
 };
+using TupleItems = FieldArrayAt<4>;   // at 12; items at 16
+using InstFields = FieldArrayAt<12>;  // at 12, then the class pointer; fields at 24
+
+// A tuple: its items follow it in memory, like an instance's fields.
+struct ObjTuple : Obj {
+    TupleItems items;  // last: the n items follow (VM::newTupleN makes room)
+    explicit ObjTuple(size_t n) : Obj(OT::Tuple) {
+        items.n = (uint32_t)n;
+        for (size_t i = 0; i < n; i++) new (&items.data()[i]) Value();
+    }
+};
+inline ObjTuple* tupleInit(void* mem, size_t n) { return new (mem) ObjTuple(n); }
+
+// Read-only items of a list (any kind, never widened) or a tuple. Items come out
+// as values (copies).
+struct SeqView {
+    const void* p = nullptr;
+    size_t n = 0;
+    uint8_t k = LK_VALUES;
+    SeqView() = default;
+    SeqView(const std::vector<Value>& v) : p(v.data()), n(v.size()) {}
+    template <size_t Off>
+    SeqView(const FieldArrayAt<Off>& f) : p(f.data()), n(f.size()) {}
+    SeqView(const ObjList& l) : n(l.len()), k(l.kind == LK_EMPTY ? (uint8_t)LK_VALUES : l.kind) {
+        switch (k) {
+            case LK_BOOLS: p = l.bools.data(); break;
+            case LK_INTS: p = l.ints.data(); break;
+            case LK_FLOATS: p = l.floats.data(); break;
+            default: p = l.vals.data(); break;
+        }
+    }
+    size_t size() const { return n; }
+    bool empty() const { return n == 0; }
+    Value operator[](size_t i) const {
+        switch (k) {
+            case LK_BOOLS: return Value::boolean(static_cast<const uint8_t*>(p)[i] != 0);
+            case LK_INTS: return Value::integer(static_cast<const int64_t*>(p)[i]);
+            case LK_FLOATS: return Value::number(static_cast<const double*>(p)[i]);
+            default: return static_cast<const Value*>(p)[i];
+        }
+    }
+    struct iterator {
+        const SeqView* v;
+        size_t i;
+        Value operator*() const { return (*v)[i]; }
+        iterator& operator++() { ++i; return *this; }
+        iterator operator+(std::ptrdiff_t d) const { return {v, (size_t)((std::ptrdiff_t)i + d)}; }
+        iterator operator-(std::ptrdiff_t d) const { return {v, (size_t)((std::ptrdiff_t)i - d)}; }
+        std::ptrdiff_t operator-(const iterator& o) const { return (std::ptrdiff_t)i - (std::ptrdiff_t)o.i; }
+        bool operator!=(const iterator& o) const { return i != o.i; }
+        bool operator==(const iterator& o) const { return i == o.i; }
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = Value;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const Value*;
+        using reference = Value;
+    };
+    iterator begin() const { return {this, 0}; }
+    iterator end() const { return {this, n}; }
+    std::vector<Value> vec() const {
+        std::vector<Value> out;
+        out.reserve(n);
+        for (size_t i = 0; i < n; i++) out.push_back((*this)[i]);
+        return out;
+    }
+};
+
+inline bool seqOf(Value v, SeqView& out);  // below, once ObjList is complete
 
 struct ObjInstance : Obj {
+    InstFields fields;  // the n values follow the instance (VM::newInstance makes room)
     ObjClass* cls;
-    FieldArray fields;  // last: the n values follow (VM::newInstance makes room)
     ObjInstance(ObjClass* c, size_t n) : Obj(OT::Instance), cls(c) {
-        fields.n = n;
+        fields.n = (uint32_t)n;
         for (size_t i = 0; i < n; i++) new (&fields.data()[i]) Value();
     }
 };
@@ -522,6 +797,23 @@ struct ObjQuat : Obj {
     ObjQuat() : Obj(OT::Quat) {}
 };
 
+// A GPU buffer (gpu.hpp): n 32-bit ints or floats, in memory the device uses and
+// the CPU reads and writes directly (mapped), or plain memory without a device.
+struct VkBufferMem;
+struct ObjGpuBuffer;
+void gpuReleaseBuffer(ObjGpuBuffer* b);
+struct ObjGpuBuffer : Obj {
+    bool floats = true;
+    uint32_t n = 0;
+    void* data = nullptr;        // n words
+    VkBufferMem* dev = nullptr;  // the device's buffer, if any
+    ObjGpuBuffer() : Obj(OT::GpuBuffer) {}
+    ~ObjGpuBuffer() { gpuReleaseBuffer(this); }
+    ObjGpuBuffer(const ObjGpuBuffer&) = delete;
+    float* fl() { return static_cast<float*>(data); }
+    int32_t* in() { return static_cast<int32_t*>(data); }
+};
+
 struct ObjRng : Obj {
     std::mt19937_64 gen;
     explicit ObjRng(uint64_t seed) : Obj(OT::Rng), gen(seed) {}
@@ -590,12 +882,27 @@ inline void destroyObj(Obj* o) {
         case OT::Mat: static_cast<ObjMat*>(o)->~ObjMat(); break;
         case OT::Quat: static_cast<ObjQuat*>(o)->~ObjQuat(); break;
         case OT::Rng: static_cast<ObjRng*>(o)->~ObjRng(); break;
+        case OT::GpuBuffer: static_cast<ObjGpuBuffer*>(o)->~ObjGpuBuffer(); break;
         case OT::Time: static_cast<ObjTime*>(o)->~ObjTime(); break;
         case OT::TypeDesc: static_cast<ObjTypeDesc*>(o)->~ObjTypeDesc(); break;
         case OT::Marker: static_cast<ObjMarker*>(o)->~ObjMarker(); break;
         case OT::Interface: static_cast<ObjInterface*>(o)->~ObjInterface(); break;
         case OT::Free: break;
     }
+}
+
+// The items of a list or a tuple, read-only; false for any other value.
+inline bool seqOf(Value v, SeqView& out) {
+    if (v.t != VT::Obj) return false;
+    if (v.o->type == OT::List) {
+        out = SeqView(*static_cast<ObjList*>(v.o));
+        return true;
+    }
+    if (v.o->type == OT::Tuple) {
+        out = SeqView(static_cast<ObjTuple*>(v.o)->items);
+        return true;
+    }
+    return false;
 }
 
 }  // namespace ixo

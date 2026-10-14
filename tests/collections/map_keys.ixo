@@ -1,0 +1,21 @@
+# Maps and sets with key patterns that are hard on a hash table: strides of a power
+# of two, huge and negative numbers, floats equal to ints, deletions and re-adds.
+m = {}
+for i in 0..20000 -> m[i * 1024] = i
+for i in 0..20000 -> m[-i * 4096 - 1] = -i
+for i in 0..2000 -> m[i * 4_294_967_296] = i * 2
+print(m.len, m[1024 * 777], m[-4096 * 5 - 1], m[4_294_967_296 * 3])  # expect: 41999 777 -5 6
+print(m.has(1024.0), m[2048.0], m.has(1023), m.get(1025, "none"))  # expect: true 2 false none
+for i in 0..20000
+    if i % 3 == 0 -> m.drop(i * 1024)
+print(m.len, m.has(0), m.has(1024), m.has(3072))     # expect: 35332 false true false
+for i in 0..20000 by 3 -> m[i * 1024] = -1
+print(m.len, m[3072], m[1024])                        # expect: 41999 -1 1
+s = set()
+for i in 0..50000 -> s.add((i * 7919) % 65536 * 65536)
+print(s.len, s.has(0), s.has(65536 * 7919), s.has(65536 * 7919 + 1))  # expect: 50000 true true false
+words = {}
+for i in 0..30000 -> words[f"w{i % 5000}"] = words.get(f"w{i % 5000}", 0) + 1
+print(words.len, words["w0"], words["w4999"])         # expect: 5000 6 6
+t = {(1, 2): "a", (2, 1): "b", (1, 2.0): "c"}
+print(t.len, t[(1, 2)], t[(2, 1)])                     # expect: 2 c b

@@ -17,6 +17,7 @@ void registerIO(VM& vm);
 void registerConcurrency(VM& vm);
 void registerExt(VM& vm);
 void registerNet(VM& vm);
+void registerGpu(VM& vm);
 void setScriptPath(VM& vm, const std::string& path);  // os.script / os.script_dir
 struct Json;
 std::string jsonEncode(VM& vm, Value v, int indent);  // json.str
