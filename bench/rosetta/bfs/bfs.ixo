@@ -1,0 +1,12 @@
+# Shortest path through a grid maze with breadth-first search.
+n = 400
+wall = fn(x, y) = (x * 7 + y * 13 + x * y) % 9 == 4
+dist = {(0, 0): 0}
+queue = [(0, 0)]
+for (x, y) in queue
+    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        p = (x + dx, y + dy)
+        if 0 <= p[0] < n and 0 <= p[1] < n and not wall(p[0], p[1]) and p not in dist
+            dist[p] = dist[(x, y)] + 1
+            queue.add(p)
+print(dist[(n - 1, n - 1)], dist.len)

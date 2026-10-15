@@ -1,0 +1,14 @@
+# A 3x3 box blur over a grayscale image, four times; a checksum of the result.
+fn blur(img)
+    h = img.len
+    w = img[0].len
+    (0..h).map(fn(y) = (0..w).map(fn(x)
+        total = 0
+        for dy in -1..=1
+            for dx in -1..=1 -> total += img[(y + dy).clamp(0, h - 1)][(x + dx).clamp(0, w - 1)]
+        total // 9
+    ))
+
+img = (0..200).map(fn(y) = (0..200).map((_ * 31 + y * 17 + _ * y) % 256))
+for _ in 0..4 -> img = blur(img)
+print(img.map(_.sum).sum, img[100][100])

@@ -1,0 +1,30 @@
+# Reading settings with every failure handled: a missing file, bad lines, bad numbers.
+numeric = {"port", "workers", "timeout"}
+
+fn load(path)
+    settings = {}
+    errors = []
+    for i, line in fs.read(path)?.lines
+        line = line.trim
+        if line == "" or line.starts("#") -> continue
+        at = line.find("=")
+        if at == nil
+            errors.add(f"line {i + 1}: expected key = value")
+            continue
+        key = line[..at].trim
+        value = line[at + 1..].trim
+        if key not in numeric -> settings[key] = value
+        else settings[key] = value.int ! err
+            errors.add(f"line {i + 1}: {key} is not a number: {value}")
+            continue
+    (settings, errors)
+
+path = "settings.conf"
+fs.write(path, "# server settings\nport = 8080\nhost = example.org\nworkers = many\ntimeout = 30\nbad line\n")?
+for name in ["missing.conf", path]
+    settings, errors = load(name) ! err
+        print(f"{name}: using defaults")
+        continue
+    for k, v in settings -> print(k, v)
+    for e in errors -> print("error:", e)
+fs.drop(path)?

@@ -36,6 +36,7 @@ struct Type {
     InterfaceInfo* iface = nullptr;
     EnumInfo* en = nullptr;
     bool declared = false;  // Optional written in an annotation (`str?`): using it unchecked warns
+    bool array = false;     // List: a numeric array (xs.array), whose arithmetic goes item by item
 };
 
 std::string typeToString(const Type* t);

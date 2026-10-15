@@ -1,0 +1,8 @@
+$strict
+# Planted mistake: a race on shared data (tasks adding to one list).
+results = []
+par fn square(x: int)
+    results.add(x * x)
+with tasks
+    for i in 0..4 -> square(i)
+print(results)

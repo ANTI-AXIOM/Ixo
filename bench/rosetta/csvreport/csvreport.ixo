@@ -1,0 +1,10 @@
+# Sales by region from CSV text: totals, the best product of each region, sorted.
+lines = ["region,product,units,price"]
+for i in 0..20_000 -> lines.add(f"{["north", "south", "east", "west"][i % 4]},p{i % 13},{i % 7 + 1},{i % 11 + 0.5}")
+rows = csv.parse(lines.join("\n"))
+regions = rows.group_by(_["region"])
+for region in regions.keys.sort
+    sales = regions[region]
+    total = sales.sum_by(_["units"].int * _["price"].float)
+    best = sales.group_by(_["product"]).pairs.max_by(_[1].sum_by(_["units"].int))[0]
+    print(region, f"{total:.2f}", best)

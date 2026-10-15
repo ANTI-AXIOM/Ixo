@@ -1,0 +1,11 @@
+# Orders as JSON to a per-customer summary as JSON.
+orders = (0..5000).map({"id": _, "customer": f"c{_ % 37}", "items": (0.._ % 4 + 1).map({"sku": f"s{_}", "qty": _ + 1})})
+text = json.str(orders)
+summary = {}
+for o in json.parse(text)
+    s = summary.get(o["customer"], {"orders": 0, "units": 0})
+    s["orders"] += 1
+    s["units"] += o["items"].sum_by(_["qty"])
+    summary[o["customer"]] = s
+out = json.str(summary.keys.sort.map({"customer": _, "orders": summary[_]["orders"], "units": summary[_]["units"]}))
+print(out.len, out[..120])

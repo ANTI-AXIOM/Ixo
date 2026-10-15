@@ -3,13 +3,20 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <thread>
 
 #include "ast.hpp"
 #include "builtins.hpp"
+#include "gpukern.hpp"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/threading.h>
+#endif
 
 namespace ixo {
 
@@ -30,8 +37,200 @@ struct KernelCompiler {
     std::string err;
     int errLine = 0, errCol = 0;
     int loops = 0;
+    bool wide = false;  // Ixo's own semantics (64-bit), for maps moved to all cores
+    std::map<Decl*, int> sharedOf;  // shared array -> its index in k.shared
+    std::map<Decl*, std::pair<int, int>> vecs;  // vec variable -> (first slot, width)
+    std::map<Decl*, int> mats;  // mat parameter -> first slot (4x4, row by row)
+    int dimW = -1, dimH = -1;   // the launch's width and height (hidden parameters, for gpu.x/y/z)
 
     explicit KernelCompiler(GpuKernel& kk) : k(kk) {}
+
+    std::unique_ptr<GNode> intK(int64_t v, const Node* at) {
+        auto n = node(GNode::IntK, GTy::Int, at);
+        n->ival = v;
+        return n;
+    }
+    std::unique_ptr<GNode> varN(int s, const Node* at) {
+        auto n = node(GNode::Var, k.vars[(size_t)s], at);
+        n->slot = s;
+        return n;
+    }
+    std::unique_ptr<GNode> bin2(GBin op, GTy t, std::unique_ptr<GNode> a, std::unique_ptr<GNode> b, const Node* at) {
+        auto n = node(GNode::Bin, t, at);
+        n->op = op;
+        n->kids.push_back(std::move(a));
+        n->kids.push_back(std::move(b));
+        return n;
+    }
+    static bool isGpuCall(Expr* e, const char* name) {
+        if (e->kind != NK::Member) return false;
+        auto* m = static_cast<Member*>(e);
+        return m->isCall && m->name == name && m->object->kind == NK::Ident && static_cast<Ident*>(m->object.get())->name == "gpu";
+    }
+    Decl* identDecl(Expr* e) { return e->kind == NK::Ident ? static_cast<Ident*>(e)->decl : nullptr; }
+
+    // ---- vec and mat: each component is a float variable (vec2..vec4; mat is 4x4)
+    int vwidth(Expr* e) {
+        switch (e->kind) {
+            case NK::Ident: {
+                auto it = vecs.find(identDecl(e));
+                return it == vecs.end() ? 0 : it->second.second;
+            }
+            case NK::Call: {
+                auto* c = static_cast<Call*>(e);
+                if (c->callee->kind == NK::Ident && static_cast<Ident*>(c->callee.get())->name == "vec") return (int)c->args.size();
+                return 0;
+            }
+            case NK::Binary: {
+                auto* b = static_cast<Binary*>(e);
+                if (b->op != BinOp::Add && b->op != BinOp::Sub && b->op != BinOp::Mul && b->op != BinOp::Div) return 0;
+                int l = mats.count(identDecl(b->left.get())) ? 0 : vwidth(b->left.get());
+                return std::max(l, vwidth(b->right.get()));
+            }
+            case NK::Unary: return static_cast<Unary*>(e)->op == UnOp::Neg ? vwidth(static_cast<Unary*>(e)->operand.get()) : 0;
+            case NK::Member: {
+                auto* m = static_cast<Member*>(e);
+                return m->name == "norm" && !m->isCall ? vwidth(m->object.get()) : 0;
+            }
+            default: return 0;
+        }
+    }
+    bool vexpr(Expr* e, int w, std::vector<std::unique_ptr<GNode>>& out) {
+        out.clear();
+        switch (e->kind) {
+            case NK::Ident: {
+                auto it = vecs.find(identDecl(e));
+                if (it == vecs.end() || it->second.second != w) return fail(e, "this vec has " + std::to_string(it == vecs.end() ? 0 : it->second.second) + " components, not " + std::to_string(w));
+                for (int i = 0; i < w; i++) out.push_back(varN(it->second.first + i, e));
+                return true;
+            }
+            case NK::Call: {
+                auto* c = static_cast<Call*>(e);
+                if ((int)c->args.size() != w || w < 2 || w > 4) return fail(e, "a vec in a gpu fn has 2, 3 or 4 components");
+                for (auto& a : c->args) {
+                    auto x = expr(a.get());
+                    if (!x) return false;
+                    if (x->t != GTy::Int && x->t != GTy::Float) return fail(a.get(), "a vec's components are numbers");
+                    out.push_back(toFloat(std::move(x)));
+                }
+                return true;
+            }
+            case NK::Unary: {
+                if (!vexpr(static_cast<Unary*>(e)->operand.get(), w, out)) return false;
+                for (auto& c : out) {
+                    auto n = node(GNode::Neg, GTy::Float, e);
+                    n->kids.push_back(std::move(c));
+                    c = std::move(n);
+                }
+                return true;
+            }
+            case NK::Member: {  // v.norm: v / v.len
+                auto* m = static_cast<Member*>(e);
+                std::vector<std::unique_ptr<GNode>> v;
+                if (!vexpr(m->object.get(), w, v)) return false;
+                for (int i = 0; i < w; i++) {
+                    auto d2 = dot(m->object.get(), m->object.get(), w, e);
+                    if (!d2) return false;
+                    auto len = math(GM_Sqrt, std::move(d2), nullptr, e);
+                    if (!len) return false;
+                    out.push_back(bin2(GB_Div, GTy::Float, std::move(v[(size_t)i]), std::move(len), e));
+                }
+                return true;
+            }
+            case NK::Binary: {
+                auto* b = static_cast<Binary*>(e);
+                Decl* md = identDecl(b->left.get());
+                if (b->op == BinOp::Mul && mats.count(md)) {  // m * v (the top-left w x w of m)
+                    std::vector<std::unique_ptr<GNode>> v;
+                    if (!vexpr(b->right.get(), w, v)) return false;
+                    for (int i = 0; i < w; i++) {
+                        std::unique_ptr<GNode> sum;
+                        for (int j = 0; j < w; j++) {
+                            std::vector<std::unique_ptr<GNode>> again;
+                            if (!vexpr(b->right.get(), w, again)) return false;
+                            auto t = bin2(GB_Mul, GTy::Float, varN(mats[md] + i * 4 + j, e), std::move(again[(size_t)j]), e);
+                            sum = sum ? bin2(GB_Add, GTy::Float, std::move(sum), std::move(t), e) : std::move(t);
+                        }
+                        out.push_back(std::move(sum));
+                    }
+                    return true;
+                }
+                int lw = vwidth(b->left.get()), rw = vwidth(b->right.get());
+                if (lw && rw && lw != rw) return fail(e, "these vecs have different numbers of components");
+                if (rw && !lw && b->op != BinOp::Mul) return fail(e, "a number and a vec combine with * (or the vec comes first)");
+                if (b->op == BinOp::Div && rw) return fail(e, "a vec is divided by a number");
+                std::vector<std::unique_ptr<GNode>> l, r;
+                if (lw && !vexpr(b->left.get(), w, l)) return false;
+                if (rw && !vexpr(b->right.get(), w, r)) return false;
+                for (int i = 0; i < w; i++) {
+                    std::unique_ptr<GNode> x = lw ? std::move(l[(size_t)i]) : expr(b->left.get());
+                    std::unique_ptr<GNode> y = rw ? std::move(r[(size_t)i]) : expr(b->right.get());
+                    if (!x || !y) return false;
+                    auto c = binary(b->op, std::move(x), std::move(y), e);
+                    if (!c) return false;
+                    out.push_back(toFloat(std::move(c)));
+                }
+                return true;
+            }
+            default: return fail(e, "this isn't a vec");
+        }
+    }
+    std::unique_ptr<GNode> dot(Expr* a, Expr* b, int w, const Node* at) {
+        std::vector<std::unique_ptr<GNode>> x, y;
+        if (!vexpr(a, w, x) || !vexpr(b, w, y)) return nullptr;
+        std::unique_ptr<GNode> sum;
+        for (int i = 0; i < w; i++) {
+            auto t = bin2(GB_Mul, GTy::Float, std::move(x[(size_t)i]), std::move(y[(size_t)i]), at);
+            sum = sum ? bin2(GB_Add, GTy::Float, std::move(sum), std::move(t), at) : std::move(t);
+        }
+        return sum;
+    }
+    // v = <vec>: the components through temporaries (v = vec(v.y, v.x) swaps)
+    std::unique_ptr<GNode> setVec(Decl* d, Expr* value, BinOp op, Expr* target, const Node* at) {
+        int w = vwidth(value);
+        if (op != BinOp::None) w = std::max(w, vecs.count(d) ? vecs[d].second : 0);
+        if (w < 2 || w > 4) return fail(at, "a vec in a gpu fn has 2, 3 or 4 components"), nullptr;
+        auto it = vecs.find(d);
+        if (it != vecs.end() && it->second.second != w) return fail(at, "'" + d->name + "' is a vec of " + std::to_string(it->second.second)), nullptr;
+        if (it == vecs.end()) {
+            if (vars.count(d)) return fail(at, "'" + d->name + "' holds a number, not a vec"), nullptr;
+            vecs[d] = {(int)k.vars.size(), w};
+            for (int i = 0; i < w; i++) k.vars.push_back(GTy::Float);
+        }
+        std::vector<std::unique_ptr<GNode>> comps;
+        if (op != BinOp::None) {
+            std::vector<std::unique_ptr<GNode>> cur, add;
+            if (!vexpr(target, w, cur)) return nullptr;
+            int vw = vwidth(value);
+            if (vw && !vexpr(value, w, add)) return nullptr;
+            for (int i = 0; i < w; i++) {
+                std::unique_ptr<GNode> y = vw ? std::move(add[(size_t)i]) : expr(value);
+                if (!y) return nullptr;
+                auto c = binary(op, std::move(cur[(size_t)i]), std::move(y), at);
+                if (!c) return nullptr;
+                comps.push_back(toFloat(std::move(c)));
+            }
+        } else if (!vexpr(value, w, comps)) {
+            return nullptr;
+        }
+        auto blk = node(GNode::Block, GTy::Void, at);
+        int base = vecs[d].first, tmpBase = (int)k.vars.size();
+        for (int i = 0; i < w; i++) k.vars.push_back(GTy::Float);
+        for (int i = 0; i < w; i++) blk->kids.push_back(setVar(tmpBase + i, std::move(comps[(size_t)i]), at));
+        for (int i = 0; i < w; i++) blk->kids.push_back(setVar(base + i, varN(tmpBase + i, at), at));
+        return blk;
+    }
+    static int component(const std::string& n) { return n == "x" ? 0 : n == "y" ? 1 : n == "z" ? 2 : n == "w" ? 3 : -1; }
+    static bool uses(Node* n, const std::function<bool(Node*)>& f) {
+        bool hit = false;
+        std::function<void(Node*)> walk = [&](Node* x) {
+            if (!x || hit) return;
+            if (f(x)) hit = true;
+            forEachChild(x, walk);
+        };
+        walk(n);
+        return hit;
+    }
 
     bool fail(const Node* n, const std::string& msg) {
         if (err.empty()) {
@@ -101,6 +300,9 @@ struct KernelCompiler {
             }
             case NK::Ident: {
                 auto* id = static_cast<Ident*>(e);
+                if (id->decl && (vecs.count(id->decl) || mats.count(id->decl)))
+                    return fail(e, "'" + id->name + "' is a " + (vecs.count(id->decl) ? "vec" : "mat") + "; a number is needed here"), nullptr;
+                if (id->decl && sharedOf.count(id->decl)) return fail(e, "a shared array is used by indexing it"), nullptr;
                 if (id->decl && vars.count(id->decl)) {
                     int s = vars[id->decl];
                     auto n = node(GNode::Var, k.vars[(size_t)s], e);
@@ -116,9 +318,44 @@ struct KernelCompiler {
                 auto* m = static_cast<Member*>(e);
                 if (isGpuName(m->object.get())) {
                     if (m->name == "index" && !m->isCall) return node(GNode::ThreadIdx, GTy::Int, e);
-                    return fail(e, "gpu." + m->name + " isn't available in a gpu fn (gpu.index is)"), nullptr;
+                    if (m->name == "local" && !m->isCall)  // the place in the group of 64
+                        return bin2(GB_BitAnd, GTy::Int, node(GNode::ThreadIdx, GTy::Int, e), intK(63, e), e);
+                    if (m->name == "group" && !m->isCall)
+                        return bin2(GB_Shr, GTy::Int, node(GNode::ThreadIdx, GTy::Int, e), intK(6, e), e);
+                    if (m->name == "group_size" && !m->isCall) return intK(64, e);
+                    if ((m->name == "x" || m->name == "y" || m->name == "z") && !m->isCall && dimW >= 0) {
+                        // a 2D/3D launch: x = i % w, y = (i // w) % h, z = i // (w * h)
+                        auto tid = node(GNode::ThreadIdx, GTy::Int, e);
+                        if (m->name == "x") return bin2(GB_Mod, GTy::Int, std::move(tid), varN(dimW, e), e);
+                        if (m->name == "y")
+                            return bin2(GB_Mod, GTy::Int, bin2(GB_IntDiv, GTy::Int, std::move(tid), varN(dimW, e), e), varN(dimH, e), e);
+                        return bin2(GB_IntDiv, GTy::Int, std::move(tid), bin2(GB_Mul, GTy::Int, varN(dimW, e), varN(dimH, e), e), e);
+                    }
+                    return fail(e, "gpu." + m->name + " isn't available in a gpu fn (gpu.index, gpu.x/y/z, gpu.local and gpu.group are)"), nullptr;
                 }
                 Expr* o = m->object.get();
+                if (Decl* od = identDecl(o); od && sharedOf.count(od)) {
+                    if (m->name != "len" || m->isCall) return fail(e, "a shared array has [i] and .len"), nullptr;
+                    return intK(k.shared[(size_t)sharedOf[od]].second, e);
+                }
+                if (int vw = vwidth(o); vw > 0) {
+                    int c = component(m->name);
+                    if (c >= 0 && c < vw && !m->isCall) {
+                        std::vector<std::unique_ptr<GNode>> comps;
+                        if (!vexpr(o, vw, comps)) return nullptr;
+                        return std::move(comps[(size_t)c]);
+                    }
+                    if (m->name == "len" && !m->isCall) {
+                        auto d2 = dot(o, o, vw, e);
+                        if (!d2) return nullptr;
+                        return math(GM_Sqrt, std::move(d2), nullptr, e);
+                    }
+                    if (m->name == "dot" && m->isCall && m->args.size() == 1) {
+                        if (vwidth(m->args[0].get()) != vw) return fail(e, "dot takes a vec of the same width"), nullptr;
+                        return dot(o, m->args[0].get(), vw, e);
+                    }
+                    return fail(e, "a vec in a gpu fn has .x .y .z .w, .len, .norm and .dot(v)"), nullptr;
+                }
                 if (o->kind == NK::Ident && static_cast<Ident*>(o)->decl && bufs.count(static_cast<Ident*>(o)->decl)) {
                     if (m->name != "len" || m->isCall) return fail(e, "a buffer in a gpu fn has only .len"), nullptr;
                     auto n = node(GNode::Len, GTy::Int, e);
@@ -126,9 +363,10 @@ struct KernelCompiler {
                     return n;
                 }
                 // x.sqrt, x.abs, x.floor... on numbers
-                static const std::map<std::string, GMath> methods = {{"sqrt", GM_Sqrt}, {"abs", GM_Abs},
-                                                                     {"floor", GM_Floor}, {"ceil", GM_Ceil},
-                                                                     {"float", GM_ToFloat}, {"int", GM_ToInt}};
+                static const std::map<std::string, GMath> methods = {
+                    {"sqrt", GM_Sqrt}, {"abs", GM_Abs},  {"floor", GM_Floor}, {"ceil", GM_Ceil}, {"float", GM_ToFloat},
+                    {"int", GM_ToInt}, {"sin", GM_Sin},  {"cos", GM_Cos},     {"tan", GM_Tan},   {"exp", GM_Exp},
+                    {"ln", GM_Log}};
                 auto it = methods.find(m->name);
                 if (it == methods.end() || (m->isCall && !m->args.empty()))
                     return fail(e, "." + m->name + " isn't available in a gpu fn"), nullptr;
@@ -139,6 +377,24 @@ struct KernelCompiler {
             case NK::Index: {
                 auto* ix = static_cast<Index*>(e);
                 Expr* o = ix->object.get();
+                if (Decl* od = identDecl(o); od && sharedOf.count(od)) {
+                    auto i = expr(ix->index.get());
+                    if (!i) return nullptr;
+                    if (i->t != GTy::Int) return fail(ix->index.get(), "an index must be an int"), nullptr;
+                    int s = sharedOf[od];
+                    auto n = node(GNode::SLoad, k.shared[(size_t)s].first, e);
+                    n->slot = s;
+                    n->kids.push_back(std::move(i));
+                    return n;
+                }
+                if (Decl* od = identDecl(o); od && mats.count(od)) {  // m[i, j] with constant i and j
+                    auto* t = ix->index->kind == NK::TupleLit ? static_cast<TupleLit*>(ix->index.get()) : nullptr;
+                    if (!t || t->elems.size() != 2 || t->elems[0]->kind != NK::IntLit || t->elems[1]->kind != NK::IntLit)
+                        return fail(e, "a mat in a gpu fn is read as m[i, j] with constant i and j"), nullptr;
+                    int64_t r = static_cast<IntLit*>(t->elems[0].get())->value, c = static_cast<IntLit*>(t->elems[1].get())->value;
+                    if (r < 0 || r > 3 || c < 0 || c > 3) return fail(e, "a mat in a gpu fn is 4x4"), nullptr;
+                    return varN(mats[od] + (int)(r * 4 + c), e);
+                }
                 if (!(o->kind == NK::Ident && static_cast<Ident*>(o)->decl && bufs.count(static_cast<Ident*>(o)->decl)))
                     return fail(e, "only buffers can be indexed in a gpu fn"), nullptr;
                 int b = bufs[static_cast<Ident*>(o)->decl];
@@ -218,6 +474,14 @@ struct KernelCompiler {
         bool num = x->t == GTy::Int || x->t == GTy::Float;
         if (!num || (y && y->t != GTy::Int && y->t != GTy::Float)) return fail(at, "math in a gpu fn takes numbers"), nullptr;
         GTy t = GTy::Float;
+        if (wide && (op == GM_Min || op == GM_Max) && x->t != y->t)
+            return fail(at, "min and max of an int and a float keep the one they pick as it is: not in a parallel map"), nullptr;
+        if (wide && (op == GM_Floor || op == GM_Ceil)) {  // Ixo's floor and ceil give ints
+            auto n = node(GNode::Math, GTy::Int, at);
+            n->op = op;
+            n->kids.push_back(toFloat(std::move(x)));
+            return n;
+        }
         switch (op) {
             case GM_Abs: t = x->t; break;
             case GM_Min: case GM_Max:
@@ -286,6 +550,12 @@ struct KernelCompiler {
                 break;
             default: return fail(at, std::string("'") + binOpText(op) + "' isn't available in a gpu fn"), nullptr;
         }
+        bool intsDivided = false;
+        if (wide) {  // where Ixo's own arithmetic differs from the device's
+            if (g == GB_Pow && l->t == GTy::Int && r->t == GTy::Int)
+                return fail(at, "an int to an int power stays an int in Ixo: not in a parallel map"), nullptr;
+            if (g == GB_Div && l->t == GTy::Int && r->t == GTy::Int) intsDivided = true;
+        }
         // mixed numbers: both as floats
         if (num(l->t) && num(r->t) && (l->t != r->t || g == GB_Div || g == GB_Pow)) {
             l = toFloat(std::move(l));
@@ -293,6 +563,7 @@ struct KernelCompiler {
         }
         auto n = node(GNode::Bin, t, at);
         n->op = g;
+        if (intsDivided) n->ival = 1;  // dividing by an int 0 stops the loop: the map hands it back
         n->kids.push_back(std::move(l));
         n->kids.push_back(std::move(r));
         return n;
@@ -338,6 +609,10 @@ struct KernelCompiler {
             case NK::ExprStmt: {
                 Expr* e = static_cast<ExprStmt*>(s)->expr.get();
                 if (e->kind == NK::If) return ifStmt(static_cast<If*>(e));
+                if (isGpuCall(e, "barrier")) {  // every thread of the group gets here before any goes on
+                    k.groups = true;
+                    return node(GNode::Barrier, GTy::Void, s);
+                }
                 if (e->kind == NK::StrLit && static_cast<StrLit*>(e)->docString) return node(GNode::Nop, GTy::Void, s);
                 return fail(s, "a statement in a gpu fn must do something (assign, if, while, for)"), nullptr;
             }
@@ -353,6 +628,55 @@ struct KernelCompiler {
                     if (!cur) return nullptr;
                     return binary(a->op, std::move(cur), std::move(v), s);
                 };
+                if (target->kind == NK::Ident && a->op == BinOp::None &&
+                    (isGpuCall(a->value.get(), "shared_floats") || isGpuCall(a->value.get(), "shared_ints"))) {
+                    // tile = gpu.shared_floats(64): an array each group of 64 threads shares
+                    auto* id = static_cast<Ident*>(target);
+                    auto* call = static_cast<Member*>(a->value.get());
+                    if (!id->decl || sharedOf.count(id->decl) || vars.count(id->decl))
+                        return fail(s, "a shared array is made once, under its own name"), nullptr;
+                    if (call->args.size() != 1 || call->args[0]->kind != NK::IntLit || static_cast<IntLit*>(call->args[0].get())->value < 1 ||
+                        static_cast<IntLit*>(call->args[0].get())->value > 8192)
+                        return fail(s, "a shared array's length is a constant from 1 to 8192"), nullptr;
+                    sharedOf[id->decl] = (int)k.shared.size();
+                    k.shared.push_back({call->name == "shared_floats" ? GTy::Float : GTy::Int,
+                                        (uint32_t)static_cast<IntLit*>(call->args[0].get())->value});
+                    k.groups = true;
+                    return node(GNode::Nop, GTy::Void, s);
+                }
+                if (target->kind == NK::Ident && static_cast<Ident*>(target)->decl &&
+                    (vecs.count(static_cast<Ident*>(target)->decl) || vwidth(a->value.get()) > 0))
+                    return setVec(static_cast<Ident*>(target)->decl, a->value.get(), a->op, target, s);
+                if (target->kind == NK::Member) {  // v.x = 1.0
+                    auto* m = static_cast<Member*>(target);
+                    Decl* vd = identDecl(m->object.get());
+                    int c = component(m->name);
+                    if (vd && vecs.count(vd) && c >= 0 && c < vecs[vd].second) {
+                        auto v = value();
+                        if (!v) return nullptr;
+                        if (v->t != GTy::Int && v->t != GTy::Float) return fail(s, "a vec's components are numbers"), nullptr;
+                        return setVar(vecs[vd].first + c, toFloat(std::move(v)), s);
+                    }
+                }
+                if (target->kind == NK::Index) {
+                    auto* ix = static_cast<Index*>(target);
+                    if (Decl* od = identDecl(ix->object.get()); od && sharedOf.count(od)) {
+                        auto i = expr(ix->index.get());
+                        if (!i) return nullptr;
+                        if (i->t != GTy::Int) return fail(ix->index.get(), "an index must be an int"), nullptr;
+                        auto v = value();
+                        if (!v) return nullptr;
+                        int sh = sharedOf[od];
+                        GTy elem = k.shared[(size_t)sh].first;
+                        if (elem == GTy::Float && v->t == GTy::Int) v = toFloat(std::move(v));
+                        if (v->t != elem) return fail(s, std::string("this shared array holds ") + tyName(elem) + "s"), nullptr;
+                        auto n = node(GNode::SStore, GTy::Void, s);
+                        n->slot = sh;
+                        n->kids.push_back(std::move(i));
+                        n->kids.push_back(std::move(v));
+                        return n;
+                    }
+                }
                 if (target->kind == NK::Ident) {
                     auto* id = static_cast<Ident*>(target);
                     if (!id->decl) return fail(s, "'" + id->name + "' isn't known here"), nullptr;
@@ -519,11 +843,26 @@ struct KernelCompiler {
     bool compile(FnDecl* fnd) {
         k.name = fnd->name;
         fnInfo = fnd->info;
+        k.unchecked = std::find(fnd->attrs.begin(), fnd->attrs.end(), "$unsafe") != fnd->attrs.end();
         if (fnd->ret) return fail(fnd, "a gpu fn returns nothing: it writes its results into buffers");
         for (auto& p : fnd->params) {
             if (!p.type) return fail(fnd, "the parameters of a gpu fn need a type (int, float, bool, buffer[int] or buffer[float]): '" + p.name + "' has none");
             if (p.def) return fail(fnd, "the parameters of a gpu fn can't have default values");
             TypeExpr* t = p.type.get();
+            int vw = t->k == TypeExpr::Named && t->args.empty()
+                         ? (t->name == "vec2" ? 2 : t->name == "vec3" || t->name == "vec" ? 3 : t->name == "vec4" ? 4 : t->name == "mat" ? 16 : 0)
+                         : 0;
+            if (vw) {  // a vec or mat: one float parameter per component
+                k.args.push_back({p.name, vw == 16 ? 2 : 1, vw});
+                if (vw == 16) mats[p.decl] = (int)k.vars.size();
+                else vecs[p.decl] = {(int)k.vars.size(), vw};
+                for (int i = 0; i < vw; i++) {
+                    k.vars.push_back(GTy::Float);
+                    k.params.push_back({p.name + "." + std::to_string(i), GTy::Float, GTy::Void});
+                }
+                continue;
+            }
+            k.args.push_back({p.name, 0, 1});
             GParam gp{p.name, GTy::Void, GTy::Void};
             if (t->k == TypeExpr::Named && t->args.empty() && (t->name == "int" || t->name == "float" || t->name == "bool")) {
                 gp.t = t->name == "int" ? GTy::Int : t->name == "float" ? GTy::Float : GTy::Bool;
@@ -544,46 +883,103 @@ struct KernelCompiler {
             }
             k.params.push_back(gp);
         }
+        // gpu.x/y/z: the launch's width and height come as two more int parameters
+        if (fnd->body && uses(fnd->body.get(), [](Node* x) {
+                if (x->kind != NK::Member) return false;
+                auto* m = static_cast<Member*>(x);
+                return (m->name == "x" || m->name == "y" || m->name == "z") && m->object->kind == NK::Ident &&
+                       static_cast<Ident*>(m->object.get())->name == "gpu";
+            })) {
+            k.dims = true;
+            dimW = (int)k.vars.size();
+            k.vars.push_back(GTy::Int);
+            k.params.push_back({"$width", GTy::Int, GTy::Void});
+            dimH = (int)k.vars.size();
+            k.vars.push_back(GTy::Int);
+            k.params.push_back({"$height", GTy::Int, GTy::Void});
+        }
         k.body = block(fnd->body.get());
         return k.body != nullptr && err.empty();
+    }
+
+    // gpu xs.map(fn(v) = e): i = gpu.index; if i < dst.len { v = src[i]; dst[i] = e }
+    bool compileMap(FnDecl* lam, const std::vector<std::pair<Decl*, GTy>>& caps, GTy elem) {
+        k.name = "map";
+        k.wide = wide;
+        if (lam->params.size() != 1 || !lam->params[0].decl)
+            return fail(lam, "a gpu map takes a lambda with one parameter: gpu xs.map(fn(v) = v * v)");
+        Block* b = lam->body.get();
+        if (!b || b->stmts.size() != 1 || b->stmts[0]->kind != NK::ExprStmt)
+            return fail(lam, "a gpu map's lambda is one expression: gpu xs.map(fn(v) = v * v)");
+        k.params.push_back({"items", GTy::Buffer, elem});
+        k.params.push_back({"out", GTy::Buffer, GTy::Float});
+        k.buffers = 2;
+        for (auto& [d, t] : caps) {
+            vars[d] = (int)k.vars.size();
+            k.vars.push_back(t);
+            k.params.push_back({d ? std::string("captured") : std::string(), t, GTy::Void});
+        }
+        int iv = (int)k.vars.size();
+        k.vars.push_back(GTy::Int);
+        int vv = (int)k.vars.size();
+        k.vars.push_back(elem);
+        vars[lam->params[0].decl] = vv;
+        auto e = expr(static_cast<ExprStmt*>(b->stmts[0].get())->expr.get());
+        if (!e || !err.empty()) return false;
+        if (wide && e->t == GTy::Bool) {  // (a parallel map) bools come back as 0 and 1, which they are underneath
+            k.outBool = true;
+            e->t = GTy::Int;
+        }
+        if (e->t != GTy::Int && e->t != GTy::Float) return fail(lam, "a gpu map's lambda gives a number (int or float)");
+        k.params[1].elem = e->t;
+        auto var = [&](int s, GTy t) {
+            auto n = node(GNode::Var, t, lam);
+            n->slot = s;
+            return n;
+        };
+        auto body = node(GNode::Block, GTy::Void, lam);
+        body->kids.push_back(setVar(iv, node(GNode::ThreadIdx, GTy::Int, lam), lam));
+        auto len = node(GNode::Len, GTy::Int, lam);
+        len->slot = 1;
+        auto cond = node(GNode::Bin, GTy::Bool, lam);
+        cond->op = GB_Lt;
+        cond->kids.push_back(var(iv, GTy::Int));
+        cond->kids.push_back(std::move(len));
+        auto then = node(GNode::Block, GTy::Void, lam);
+        auto load = node(GNode::Load, elem, lam);
+        load->slot = 0;
+        load->kids.push_back(var(iv, GTy::Int));
+        then->kids.push_back(setVar(vv, std::move(load), lam));
+        auto store = node(GNode::Store, GTy::Void, lam);
+        store->slot = 1;
+        store->kids.push_back(var(iv, GTy::Int));
+        store->kids.push_back(std::move(e));
+        then->kids.push_back(std::move(store));
+        auto ifn = node(GNode::If, GTy::Void, lam);
+        ifn->kids.push_back(std::move(cond));
+        ifn->kids.push_back(std::move(then));
+        ifn->kids.push_back(node(GNode::Block, GTy::Void, lam));
+        body->kids.push_back(std::move(ifn));
+        k.body = std::move(body);
+        return err.empty();
     }
 };
 
 // ------------------------------------------------------------------ the CPU fallback
 
-union GWord {
-    int32_t i;
-    float f;
-    uint32_t u;
-};
-
-// The kernel as register code: each variable is a register, temporaries follow;
-// one tight loop runs it for every thread, on every core.
-enum COp : uint8_t {
-    C_CONST, C_MOV, C_TID, C_LEN, C_LOAD, C_STORE, C_IADD, C_ISUB, C_IMUL, C_FADD, C_FSUB, C_FMUL, C_FDIV, C_IDIV,
-    C_IMOD, C_FIDIV, C_FMOD, C_FPOW, C_ILT, C_ILE, C_IGT, C_IGE, C_IEQ, C_INE, C_FLT, C_FLE, C_FGT, C_FGE, C_FEQ,
-    C_FNE, C_AND, C_OR, C_XOR, C_SHL, C_SHR, C_NOT, C_INEG, C_FNEG, C_MATH, C_JMP, C_JZ, C_RET
-};
-struct CInst {
-    COp op;
-    uint8_t m;  // C_MATH: GMath; C_MATH also: 1 when the operand is an int
-    uint8_t m2;
-    int32_t d, a, b;
-};
-
-struct CpuCode {
-    std::vector<CInst> code;
-    int regs = 0;
-};
-
+// The kernel as register code (gpukern.hpp): each variable is a register,
+// temporaries follow; one tight loop runs it for every thread, on every core,
+// as machine code where the JIT runs (kcode.cpp).
 struct CpuCompiler {
     const GpuKernel& k;
     CpuCode out;
     int temp = 0;
-    std::vector<std::pair<size_t, size_t>> loops;  // (continue target, break patches start)
     std::vector<std::vector<size_t>> breaks, conts;
-
-    explicit CpuCompiler(const GpuKernel& kk) : k(kk) { temp = (int)k.vars.size(); }
+    explicit CpuCompiler(const GpuKernel& kk) : k(kk) {
+        temp = (int)k.vars.size();
+        out.wide = k.wide;
+        out.groups = k.groups;
+    }
     int tmp() {
         int r = temp++;
         out.regs = std::max(out.regs, temp);
@@ -593,21 +989,27 @@ struct CpuCompiler {
         out.code.push_back(CInst{op, m, m2, d, a, b});
         return out.code.size() - 1;
     }
+    int constant(const GNode& n) {
+        int r = tmp();
+        if (out.wide && n.k != GNode::BoolK) {
+            uint64_t bits;
+            if (n.k == GNode::FloatK) std::memcpy(&bits, &n.fval, 8);
+            else bits = (uint64_t)n.ival;
+            out.consts.push_back(bits);
+            emit(C_CONSTW, r, (int32_t)out.consts.size() - 1);
+        } else if (n.k == GNode::FloatK) {
+            float f = (float)n.fval;
+            int32_t bits;
+            std::memcpy(&bits, &f, 4);
+            emit(C_CONST, r, bits);
+        } else {
+            emit(C_CONST, r, (int32_t)n.ival);
+        }
+        return r;
+    }
     int expr(const GNode& n) {
         switch (n.k) {
-            case GNode::IntK: case GNode::BoolK: {
-                int r = tmp();
-                emit(C_CONST, r, (int32_t)n.ival);
-                return r;
-            }
-            case GNode::FloatK: {
-                int r = tmp();
-                float f = (float)n.fval;
-                int32_t bits;
-                std::memcpy(&bits, &f, 4);
-                emit(C_CONST, r, bits);
-                return r;
-            }
+            case GNode::IntK: case GNode::BoolK: case GNode::FloatK: return constant(n);
             case GNode::Var: return n.slot;
             case GNode::ThreadIdx: {
                 int r = tmp();
@@ -623,6 +1025,12 @@ struct CpuCompiler {
                 int i = expr(*n.kids[0]);
                 int r = tmp();
                 emit(C_LOAD, r, n.slot, i);
+                return r;
+            }
+            case GNode::SLoad: {
+                int i = expr(*n.kids[0]);
+                int r = tmp();
+                emit(C_SLOAD, r, n.slot, i);
                 return r;
             }
             case GNode::Neg: {
@@ -641,7 +1049,7 @@ struct CpuCompiler {
                 int x = expr(*n.kids[0]);
                 int y = n.kids.size() > 1 ? expr(*n.kids[1]) : 0;
                 int r = tmp();
-                emit(C_MATH, r, x, y, (uint8_t)n.op, n.kids[0]->t == GTy::Int ? 1 : 0);
+                emit(C_MATH, r, x, y, (uint8_t)n.op, (uint8_t)((n.kids[0]->t == GTy::Int ? 1 : 0) | (n.t == GTy::Int ? 2 : 0)));
                 return r;
             }
             case GNode::Bin: {
@@ -651,11 +1059,15 @@ struct CpuCompiler {
                 GTy t = n.kids[0]->t;
                 bool f = t == GTy::Float;
                 COp op = C_IADD;
+                uint8_t m2 = 0;
                 switch (n.op) {
                     case GB_Add: op = f ? C_FADD : C_IADD; break;
                     case GB_Sub: op = f ? C_FSUB : C_ISUB; break;
                     case GB_Mul: op = f ? C_FMUL : C_IMUL; break;
-                    case GB_Div: op = C_FDIV; break;
+                    case GB_Div:
+                        op = C_FDIV;
+                        m2 = n.ival ? 1 : 0;  // (wide) ints: 0 stops
+                        break;
                     case GB_Pow: op = C_FPOW; break;
                     case GB_IntDiv: op = f ? C_FIDIV : C_IDIV; break;
                     case GB_Mod: op = f ? C_FMOD : C_IMOD; break;
@@ -671,7 +1083,7 @@ struct CpuCompiler {
                     case GB_Shl: op = C_SHL; break;
                     case GB_Shr: op = C_SHR; break;
                 }
-                emit(op, r, x, y);
+                emit(op, r, x, y, 0, m2);
                 return r;
             }
             default: return 0;
@@ -691,6 +1103,13 @@ struct CpuCompiler {
                 emit(C_STORE, n.slot, i, v);
                 break;
             }
+            case GNode::SStore: {
+                int i = expr(*n.kids[0]);
+                int v = expr(*n.kids[1]);
+                emit(C_SSTORE, n.slot, i, v);
+                break;
+            }
+            case GNode::Barrier: emit(C_BAR); break;
             case GNode::Block:
                 for (auto& c : n.kids) stmt(*c);
                 break;
@@ -733,21 +1152,6 @@ struct CpuCompiler {
     }
 };
 
-const CpuCode& cpuCodeFor(GpuKernel& k) {
-    static std::mutex lock;
-    static std::map<const GpuKernel*, std::unique_ptr<CpuCode>> cache;
-    std::lock_guard<std::mutex> g(lock);
-    auto& c = cache[&k];
-    if (!c) {
-        CpuCompiler cc(k);
-        cc.out.regs = (int)k.vars.size();
-        cc.stmt(*k.body);
-        cc.emit(C_RET);
-        c = std::make_unique<CpuCode>(std::move(cc.out));
-    }
-    return *c;
-}
-
 int32_t floorDiv(int32_t a, int32_t b) {
     if (b == 0) return 0;  // (as on the device: defined as 0)
     if (b == -1) return (int32_t)(0u - (uint32_t)a);
@@ -761,7 +1165,7 @@ int32_t floorMod(int32_t a, int32_t b) {
     if (m != 0 && ((m < 0) != (b < 0))) m += b;
     return m;
 }
-float mathOp(uint8_t op, bool ints, GWord x, GWord y, GWord& out) {
+void mathOp(uint8_t op, bool ints, GWord x, GWord y, GWord& out) {
     switch (op) {
         case GM_Sqrt: out.f = std::sqrt(x.f); break;
         case GM_Abs:
@@ -791,23 +1195,48 @@ float mathOp(uint8_t op, bool ints, GWord x, GWord y, GWord& out) {
             break;
         }
     }
-    return 0;
+}
+// the instructions machine code leaves to C++ (narrow)
+void narrowOp(const CInst& in, GWord* r) {
+    switch (in.op) {
+        case C_IDIV: r[in.d].i = floorDiv(r[in.a].i, r[in.b].i); break;
+        case C_IMOD: r[in.d].i = floorMod(r[in.a].i, r[in.b].i); break;
+        case C_FIDIV: r[in.d].f = std::floor(r[in.a].f / r[in.b].f); break;
+        case C_FMOD: {
+            float x = r[in.a].f, y = r[in.b].f;
+            r[in.d].f = x - y * std::floor(x / y);
+            break;
+        }
+        case C_FPOW: r[in.d].f = std::pow(r[in.a].f, r[in.b].f); break;
+        case C_MATH: {
+            GWord o{};
+            mathOp(in.m, (in.m2 & 1) != 0, r[in.a], r[in.b], o);
+            r[in.d] = o;
+            break;
+        }
+        default: break;
+    }
 }
 
+struct CpuProgram {
+    CpuCode code;
+    KernelFn fn = nullptr;  // machine code (null: the register code runs)
+};
+
 struct CpuRun {
-    const CpuCode& c;
+    const GpuKernel& k;
+    const CpuProgram& p;
     const std::vector<ObjGpuBuffer*>& bufs;  // by parameter index (null for scalars)
     const std::vector<GWord>& init;          // the scalar parameters' values
     std::atomic<int64_t>* bad;
-
     void bounds(int32_t i, int b) {
         int64_t none = -1;
         bad->compare_exchange_strong(none, (int64_t)(uint32_t)i | ((int64_t)b << 32));
     }
-    void run(int32_t tid, GWord* r) {
-        for (size_t s = 0; s < init.size(); s++) r[s] = init[s];
-        const CInst* code = c.code.data();
-        for (size_t pc = 0;;) {
+    // runs a thread from pc until it ends (false) or reaches a barrier (true)
+    bool step(int32_t tid, GWord* r, size_t& pc, GWord* const* shared) {
+        const CInst* code = p.code.code.data();
+        for (;;) {
             const CInst& in = code[pc++];
             switch (in.op) {
                 case C_CONST: r[in.d].i = in.a; break;
@@ -832,6 +1261,23 @@ struct CpuRun {
                     else static_cast<uint32_t*>(b->data)[i] = r[in.b].u;
                     break;
                 }
+                case C_SLOAD: {
+                    int32_t i = r[in.b].i;
+                    if (!shared || (uint32_t)i >= k.shared[(size_t)in.a].second) {
+                        bounds(i, (int)k.params.size() + in.a);
+                        r[in.d].u = 0;
+                    } else {
+                        r[in.d] = shared[in.a][i];
+                    }
+                    break;
+                }
+                case C_SSTORE: {
+                    int32_t i = r[in.a].i;
+                    if (!shared || (uint32_t)i >= k.shared[(size_t)in.d].second) bounds(i, (int)k.params.size() + in.d);
+                    else shared[in.d][i] = r[in.b];
+                    break;
+                }
+                case C_BAR: return true;
                 case C_IADD: r[in.d].u = r[in.a].u + r[in.b].u; break;
                 case C_ISUB: r[in.d].u = r[in.a].u - r[in.b].u; break;
                 case C_IMUL: r[in.d].u = r[in.a].u * r[in.b].u; break;
@@ -839,15 +1285,7 @@ struct CpuRun {
                 case C_FSUB: r[in.d].f = r[in.a].f - r[in.b].f; break;
                 case C_FMUL: r[in.d].f = r[in.a].f * r[in.b].f; break;
                 case C_FDIV: r[in.d].f = r[in.a].f / r[in.b].f; break;
-                case C_IDIV: r[in.d].i = floorDiv(r[in.a].i, r[in.b].i); break;
-                case C_IMOD: r[in.d].i = floorMod(r[in.a].i, r[in.b].i); break;
-                case C_FIDIV: r[in.d].f = std::floor(r[in.a].f / r[in.b].f); break;
-                case C_FMOD: {
-                    float x = r[in.a].f, y = r[in.b].f;
-                    r[in.d].f = x - y * std::floor(x / y);
-                    break;
-                }
-                case C_FPOW: r[in.d].f = std::pow(r[in.a].f, r[in.b].f); break;
+                case C_IDIV: case C_IMOD: case C_FIDIV: case C_FMOD: case C_FPOW: case C_MATH: narrowOp(in, r); break;
                 case C_ILT: r[in.d].i = r[in.a].i < r[in.b].i; break;
                 case C_ILE: r[in.d].i = r[in.a].i <= r[in.b].i; break;
                 case C_IGT: r[in.d].i = r[in.a].i > r[in.b].i; break;
@@ -868,40 +1306,293 @@ struct CpuRun {
                 case C_NOT: r[in.d].i = !r[in.a].i; break;
                 case C_INEG: r[in.d].u = 0u - r[in.a].u; break;
                 case C_FNEG: r[in.d].f = -r[in.a].f; break;
-                case C_MATH: {
-                    GWord o{};
-                    mathOp(in.m, in.m2 != 0, r[in.a], r[in.b], o);
-                    r[in.d] = o;
-                    break;
-                }
                 case C_JMP: pc = (size_t)in.a; break;
                 case C_JZ:
                     if (!r[in.a].i) pc = (size_t)in.b;
                     break;
-                case C_RET: return;
+                case C_RET: return false;
+                default: break;
             }
         }
     }
+    void run(int32_t tid, GWord* r) {
+        for (size_t s = 0; s < init.size(); s++) r[s] = init[s];
+        size_t pc = 0;
+        step(tid, r, pc, nullptr);
+    }
 };
 
-void runOnCpu(CpuRun& r, uint32_t n) {
+// what machine code calls for the rarer instructions (narrow)
+void narrowHelper(void* regs, const CInst* in, KCtx* ctx) {
+    auto* r = static_cast<GWord*>(regs);
+    auto* run = static_cast<CpuRun*>(ctx->run);
+    switch (in->op) {
+        case C_LOAD:
+            run->bounds(r[in->b].i, in->a);
+            r[in->d].u = 0;
+            break;
+        case C_STORE: run->bounds(r[in->a].i, in->d); break;
+        default: narrowOp(*in, r); break;
+    }
+}
+
+// Ixo's own arithmetic (64-bit), for maps moved to all cores: exactly what the
+// loop gives. Something the loop would stop at (dividing an int by 0) sets the
+// trap, and the loop runs instead to stop there.
+struct WideRun {
+    explicit WideRun(const CpuProgram& pp) : p(pp) {}
+    const CpuProgram& p;
+    KCtx ctx{};
+    std::vector<GWide> init;
+    std::atomic<bool> trap{false};
+};
+void wideOp(const CInst& in, GWide* r, WideRun* run) {
+    switch (in.op) {
+        case C_IDIV: case C_IMOD: {
+            int64_t a = r[in.a].i, b = r[in.b].i;
+            if (b == 0) {
+                run->trap = true;
+                r[in.d].i = 0;
+                break;
+            }
+            if (in.op == C_IDIV) {
+                int64_t q = b == -1 ? (int64_t)(0 - (uint64_t)a) : a / b;
+                if (b != -1 && (a % b != 0) && ((a < 0) != (b < 0))) q--;
+                r[in.d].i = q;
+            } else {
+                int64_t m = b == -1 ? 0 : a % b;
+                if (m != 0 && ((m < 0) != (b < 0))) m += b;
+                r[in.d].i = m;
+            }
+            break;
+        }
+        case C_FDIV:
+            if (in.m2 && r[in.b].f == 0) run->trap = true;
+            r[in.d].f = r[in.a].f / r[in.b].f;
+            break;
+        case C_FIDIV:
+            if (r[in.b].f == 0) run->trap = true;
+            r[in.d].f = std::floor(r[in.a].f / r[in.b].f);
+            break;
+        case C_FMOD: {
+            double y = r[in.b].f;
+            if (y == 0) {
+                run->trap = true;
+                r[in.d].f = 0;
+                break;
+            }
+            double m = std::fmod(r[in.a].f, y);
+            if (m != 0 && ((m < 0) != (y < 0))) m += y;
+            r[in.d].f = m;
+            break;
+        }
+        case C_FPOW: r[in.d].f = std::pow(r[in.a].f, r[in.b].f); break;
+        case C_MATH: {
+            bool intIn = in.m2 & 1, intOut = in.m2 & 2;
+            GWide x = r[in.a], y = r[in.b];
+            GWide o{};
+            switch (in.m) {
+                case GM_Sqrt: o.f = std::sqrt(x.f); break;
+                case GM_Abs:
+                    if (intIn) o.i = x.i < 0 ? (int64_t)(0 - (uint64_t)x.i) : x.i;
+                    else o.f = std::fabs(x.f);
+                    break;
+                case GM_Min:
+                    if (intIn) o.i = y.i < x.i ? y.i : x.i;
+                    else o.f = y.f < x.f ? y.f : x.f;
+                    break;
+                case GM_Max:
+                    if (intIn) o.i = y.i > x.i ? y.i : x.i;
+                    else o.f = y.f > x.f ? y.f : x.f;
+                    break;
+                case GM_Floor:
+                    if (intOut) o.i = (int64_t)std::floor(x.f);
+                    else o.f = std::floor(x.f);
+                    break;
+                case GM_Ceil:
+                    if (intOut) o.i = (int64_t)std::ceil(x.f);
+                    else o.f = std::ceil(x.f);
+                    break;
+                case GM_Sin: o.f = std::sin(x.f); break;
+                case GM_Cos: o.f = std::cos(x.f); break;
+                case GM_Tan: o.f = std::tan(x.f); break;
+                case GM_Exp: o.f = std::exp(x.f); break;
+                case GM_Log: o.f = std::log(x.f); break;
+                case GM_Pow: o.f = std::pow(x.f, y.f); break;
+                case GM_ToFloat: o.f = (double)x.i; break;
+                case GM_ToInt: o.i = (int64_t)x.f; break;
+            }
+            r[in.d] = o;
+            break;
+        }
+        case C_LOAD: case C_STORE: run->trap = true; break;  // (a map reads and writes its own place)
+        default: break;
+    }
+}
+void wideHelper(void* regs, const CInst* in, KCtx* ctx) { wideOp(*in, static_cast<GWide*>(regs), static_cast<WideRun*>(ctx->run)); }
+// the register code, wide (without machine code)
+void wideRun(WideRun& w, int64_t tid, GWide* r) {
+    const CInst* code = w.p.code.code.data();
+    const uint64_t* consts = w.p.code.consts.data();
+    for (size_t pc = 0;;) {
+        const CInst& in = code[pc++];
+        switch (in.op) {
+            case C_CONST: r[in.d].i = in.a; break;
+            case C_CONSTW: r[in.d].u = consts[in.a]; break;
+            case C_MOV: r[in.d] = r[in.a]; break;
+            case C_TID: r[in.d].i = tid; break;
+            case C_LEN: r[in.d].i = (int64_t)w.ctx.len[in.a]; break;
+            case C_LOAD: {
+                int64_t i = r[in.b].i;
+                if ((uint64_t)i >= w.ctx.len[in.a]) wideOp(in, r, &w);
+                else r[in.d].u = static_cast<uint64_t*>(w.ctx.data[in.a])[i];
+                break;
+            }
+            case C_STORE: {
+                int64_t i = r[in.a].i;
+                if ((uint64_t)i >= w.ctx.len[in.d]) wideOp(in, r, &w);
+                else static_cast<uint64_t*>(w.ctx.data[in.d])[i] = r[in.b].u;
+                break;
+            }
+            case C_IADD: r[in.d].u = r[in.a].u + r[in.b].u; break;
+            case C_ISUB: r[in.d].u = r[in.a].u - r[in.b].u; break;
+            case C_IMUL: r[in.d].u = r[in.a].u * r[in.b].u; break;
+            case C_FADD: r[in.d].f = r[in.a].f + r[in.b].f; break;
+            case C_FSUB: r[in.d].f = r[in.a].f - r[in.b].f; break;
+            case C_FMUL: r[in.d].f = r[in.a].f * r[in.b].f; break;
+            case C_FDIV: case C_IDIV: case C_IMOD: case C_FIDIV: case C_FMOD: case C_FPOW: case C_MATH: wideOp(in, r, &w); break;
+            case C_ILT: r[in.d].i = r[in.a].i < r[in.b].i; break;
+            case C_ILE: r[in.d].i = r[in.a].i <= r[in.b].i; break;
+            case C_IGT: r[in.d].i = r[in.a].i > r[in.b].i; break;
+            case C_IGE: r[in.d].i = r[in.a].i >= r[in.b].i; break;
+            case C_IEQ: r[in.d].i = r[in.a].i == r[in.b].i; break;
+            case C_INE: r[in.d].i = r[in.a].i != r[in.b].i; break;
+            case C_FLT: r[in.d].i = r[in.a].f < r[in.b].f; break;
+            case C_FLE: r[in.d].i = r[in.a].f <= r[in.b].f; break;
+            case C_FGT: r[in.d].i = r[in.a].f > r[in.b].f; break;
+            case C_FGE: r[in.d].i = r[in.a].f >= r[in.b].f; break;
+            case C_FEQ: r[in.d].i = r[in.a].f == r[in.b].f; break;
+            case C_FNE: r[in.d].i = r[in.a].f != r[in.b].f; break;
+            case C_AND: r[in.d].u = r[in.a].u & r[in.b].u; break;
+            case C_OR: r[in.d].u = r[in.a].u | r[in.b].u; break;
+            case C_XOR: r[in.d].u = r[in.a].u ^ r[in.b].u; break;
+            case C_SHL: r[in.d].u = r[in.a].u << (r[in.b].u & 63); break;
+            case C_SHR: r[in.d].i = r[in.a].i >> (r[in.b].u & 63); break;
+            case C_NOT: r[in.d].i = !r[in.a].i; break;
+            case C_INEG: r[in.d].u = 0 - r[in.a].u; break;
+            case C_FNEG: r[in.d].f = -r[in.a].f; break;
+            case C_JMP: pc = (size_t)in.a; break;
+            case C_JZ:
+                if (!r[in.a].i) pc = (size_t)in.b;
+                break;
+            case C_RET: return;
+            default: return;
+        }
+    }
+}
+
+bool kernelMachineCodeOn() {
+    static const bool on = [] {
+        const char* e = std::getenv("IXO_GPU_JIT");
+        return !(e && e[0] == '0');
+    }();
+    return on;
+}
+
+const CpuProgram& cpuCodeFor(GpuKernel& k) {
+    static std::mutex lock;
+    static std::map<const GpuKernel*, std::unique_ptr<CpuProgram>> cache;
+    std::lock_guard<std::mutex> g(lock);
+    auto& c = cache[&k];
+    if (!c) {
+        CpuCompiler cc(k);
+        cc.out.regs = std::max(cc.out.regs, (int)k.vars.size());
+        cc.stmt(*k.body);
+        cc.emit(C_RET);
+        c = std::make_unique<CpuProgram>();
+        c->code = std::move(cc.out);
+        if (kernelMachineCodeOn()) c->fn = kernelMachineCode(c->code, k.wide ? wideHelper : narrowHelper);
+    }
+    return *c;
+}
+
+template <class F>
+void onCores(uint32_t n, uint32_t minSplit, F f) {
     unsigned cores = std::max(1u, std::thread::hardware_concurrency());
-    auto range = [&r](uint32_t lo, uint32_t hi) {
-        std::vector<GWord> regs((size_t)std::max(r.c.regs, 1));
-        for (uint32_t t = lo; t < hi; t++) r.run((int32_t)t, regs.data());
-    };
-    if (n < 4096 || cores == 1) {
-        range(0, n);
+    if (n < minSplit || cores == 1) {
+        f(0u, n);
         return;
     }
     std::vector<std::thread> pool;
     uint32_t per = (n + cores - 1) / cores;
-    for (unsigned c = 0; c < cores; c++) {
+    for (unsigned c = 1; c < cores; c++) {
         uint32_t lo = c * per, hi = std::min(n, lo + per);
         if (lo >= hi) break;
-        pool.emplace_back(range, lo, hi);
+        pool.emplace_back(f, lo, hi);
     }
+    f(0u, std::min(n, per));
     for (auto& th : pool) th.join();
+}
+
+// Kernels with barriers or shared arrays: a group of 64 at a time. Its threads
+// take turns, each running until it reaches the next barrier (or ends).
+void runGroups(CpuRun& r, uint32_t n) {
+    uint32_t groups = (n + 63) / 64;
+    onCores(groups, 2, [&r](uint32_t g0, uint32_t g1) {
+        int R = std::max(r.p.code.regs, 1);
+        std::vector<GWord> regs((size_t)R * 64);
+        std::vector<std::vector<GWord>> shared(r.k.shared.size());
+        std::vector<GWord*> sp(shared.size());
+        size_t pcs[64];
+        bool live[64];
+        for (uint32_t g = g0; g < g1; g++) {
+            for (size_t s = 0; s < shared.size(); s++) {
+                shared[s].assign(r.k.shared[s].second, GWord{});
+                sp[s] = shared[s].data();
+            }
+            for (int t = 0; t < 64; t++) {
+                GWord* tr = &regs[(size_t)t * (size_t)R];
+                for (size_t s = 0; s < r.init.size(); s++) tr[s] = r.init[s];
+                pcs[t] = 0;
+                live[t] = true;
+            }
+            for (bool any = true; any;) {
+                any = false;
+                for (int t = 0; t < 64; t++) {
+                    if (!live[t]) continue;
+                    if (r.step((int32_t)(g * 64 + (uint32_t)t), &regs[(size_t)t * (size_t)R], pcs[t], sp.data())) any = true;
+                    else live[t] = false;
+                }
+            }
+        }
+    });
+}
+
+void runOnCpu(CpuRun& r, uint32_t n) {
+    if (r.p.code.groups) {
+        runGroups(r, n);
+        return;
+    }
+    KCtx base{};
+    bool mc = r.p.fn && r.bufs.size() <= (size_t)kKernelBuffers;
+    if (mc)
+        for (size_t i = 0; i < r.bufs.size(); i++)
+            if (r.bufs[i]) {
+                base.data[i] = r.bufs[i]->data;
+                base.len[i] = r.bufs[i]->n;
+            }
+    base.run = &r;
+    onCores(n, 4096, [&r, &base, mc](uint32_t lo, uint32_t hi) {
+        std::vector<GWord> regs((size_t)std::max(r.p.code.regs, 1));
+        if (mc) {
+            for (uint32_t t = lo; t < hi; t++) {
+                for (size_t s = 0; s < r.init.size(); s++) regs[s] = r.init[s];
+                r.p.fn(regs.data(), &base, (int64_t)t);
+            }
+        } else {
+            for (uint32_t t = lo; t < hi; t++) r.run((int32_t)t, regs.data());
+        }
+    });
 }
 
 // ------------------------------------------------------------------ devices and buffers
@@ -923,6 +1614,42 @@ Backend currentBackend() {
 }
 
 uint32_t pendingThreads = 0;  // gpu.launch(n, f, ...): the size for the next launch
+int64_t pendingW = 0, pendingH = 0;  // gpu.launch((w, h), f, ...): its width and height (gpu.x, gpu.y)
+
+#ifdef __EMSCRIPTEN__
+// In the browser playground, kernels run through WebGPU. A worker (gpu-worker.js)
+// does the asynchronous WebGPU calls in Ixo's shared memory. Ixo's own thread
+// blocks while it waits, so the runtime's main thread (which stays free) starts
+// that worker and hands it the work; Ixo's thread waits on a flag: 1 done, 2 no WebGPU.
+int ixo_webgpu_run(const char* wgsl, int wgslLen, const uint32_t* desc, int descLen, int32_t* flag) {
+    __atomic_store_n(flag, 0, __ATOMIC_SEQ_CST);
+    MAIN_THREAD_ASYNC_EM_ASM(
+        {
+            var flag = $4;
+            var fail = function() {
+                var f = new Int32Array(HEAPU8.buffer, flag, 1);
+                Atomics.store(f, 0, 2);
+                Atomics.notify(f, 0);
+            };
+            try {
+                if (!globalThis.__ixoGpu) globalThis.__ixoGpu = new Worker(new URL('gpu-worker.js', location.href));
+                globalThis.__ixoGpu.onerror = fail;
+                globalThis.__ixoGpu.postMessage({mem: HEAPU8.buffer, wgsl: UTF8ToString($0, $1),
+                                                 desc: Array.from(HEAPU32.subarray($2 >> 2, ($2 >> 2) + $3)), flag: flag});
+            } catch (e) {
+                fail();
+            }
+        },
+        wgsl, wgslLen, desc, descLen, flag);
+    double start = emscripten_get_now();
+    while (__atomic_load_n(flag, __ATOMIC_SEQ_CST) == 0) {
+        if (emscripten_get_now() - start > 60000) return 2;  // nothing came back: the CPU from now on
+        emscripten_futex_wait(flag, 0, 1000);
+    }
+    return __atomic_load_n(flag, __ATOMIC_SEQ_CST);
+}
+int webgpuState = 0;  // 0 not tried, 1 works, 2 not available
+#endif
 
 ObjGpuBuffer* newBuffer(VM& vm, bool floats, uint32_t n) {
     auto* b = vm.alloc<ObjGpuBuffer>();
@@ -999,6 +1726,9 @@ NATIVE(gpu_devices) {
 }
 NATIVE(gpu_device) {
     if (currentBackend() == Backend::Vulkan) return vm.vstr(vkDeviceName());
+#ifdef __EMSCRIPTEN__
+    if (webgpuState == 1) return vm.vstr("webgpu");
+#endif
     return vm.vstr("cpu");
 }
 NATIVE(gpu_index) { vm.panic("gpu.index is the thread's position inside a gpu fn"); }
@@ -1028,9 +1758,114 @@ NATIVE(buf_list) {
     for (uint32_t i = 0; i < b->n; i++) out.push_back(b->floats ? Value::number(b->fl()[i]) : Value::integer(b->in()[i]));
     return vm.newList(std::move(out));
 }
+static Value gpu_launch(VM& vm, Value* a, int n);
+
+// xs.map(fn(v) = ...) on a big list of numbers, with a lambda that only computes:
+// __auto_map(kernel for floats, kernel for ints, items, captured values...) runs it
+// on every core, with Ixo's own (64-bit) arithmetic, so the result is exactly the
+// loop's. undef: not worth it or not possible here (the loop runs instead).
+NATIVE(gpu_auto_map) {
+    static const size_t minItems = [] {
+        const char* e = std::getenv("IXO_AUTO_PAR");
+        if (e && e[0] == '0' && !e[1]) return SIZE_MAX;  // IXO_AUTO_PAR=0: never
+        return e ? (size_t)std::max<long long>(1, std::atoll(e)) : (size_t)200000;
+    }();
+    static const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
+    Value items = a[2];
+    if (vm.isWorker || vm.checkOverflow || cores < 2 || !isObjType(items, OT::List)) return Value::undef();
+    auto* l = as<ObjList>(items);
+    size_t len = l->len();
+    if (len < minItems || len > INT32_MAX) return Value::undef();
+    int kid = l->lk() == LK_INTS ? (int)a[1].i : l->lk() == LK_FLOATS ? (int)a[0].i : -1;
+    GpuKernel* k = kid >= 0 ? gpuKernel(kid) : nullptr;
+    if (!k || !k->wide || (int)k->params.size() != 2 + (n - 3)) return Value::undef();
+    const CpuProgram& prog = cpuCodeFor(*k);
+    WideRun w(prog);
+    for (int i = 3; i < n; i++) {  // captured values: exactly the types compiled for
+        GTy t = k->params[(size_t)(2 + i - 3)].t;
+        Value v = a[i];
+        GWide x{};
+        if (t == GTy::Int && v.t == VT::Int) x.i = v.i;
+        else if (t == GTy::Float && v.t == VT::Float) x.f = v.f;
+        else if (t == GTy::Bool && v.t == VT::Bool) x.i = v.b ? 1 : 0;
+        else return Value::undef();
+        w.init.push_back(x);
+    }
+    GTy outT = k->params[1].elem;
+    auto* out = vm.alloc<ObjList>();
+    Value keep = Value::object(out);
+    vm.extraRoots.push_back(keep);
+    out->become(outT == GTy::Float ? LK_FLOATS : LK_INTS);
+    if (outT == GTy::Float) out->floats.resize(len);
+    else out->ints.resize(len);
+    vm.grow(out, len * 8);
+    w.ctx.data[0] = l->lk() == LK_INTS ? (void*)l->ints.data() : (void*)l->floats.data();
+    w.ctx.len[0] = len;
+    w.ctx.data[1] = outT == GTy::Float ? (void*)out->floats.data() : (void*)out->ints.data();
+    w.ctx.len[1] = len;
+    w.ctx.run = &w;
+    onCores((uint32_t)len, 1, [&w, &prog](uint32_t lo, uint32_t hi) {
+        std::vector<GWide> regs((size_t)std::max(prog.code.regs, 1));
+        for (uint32_t t = lo; t < hi && !w.trap.load(std::memory_order_relaxed); t++) {
+            for (size_t s = 0; s < w.init.size(); s++) regs[s] = w.init[s];
+            if (prog.fn) prog.fn(regs.data(), &w.ctx, (int64_t)t);
+            else wideRun(w, (int64_t)t, regs.data());
+        }
+    });
+    vm.extraRoots.pop_back();
+    if (w.trap) return Value::undef();  // the loop runs and stops where it should
+    if (k->outBool) {
+        std::vector<uint8_t> bools(len);
+        for (size_t i = 0; i < len; i++) bools[i] = out->ints[i] != 0;
+        out->become(LK_BOOLS);
+        out->bools = std::move(bools);
+    }
+    if (isArray(items)) out->appendable = 1;
+    return keep;
+}
+
+// gpu xs.map(fn(v) = ...): __gpu_map(kernel for float items, kernel for int items (or -1),
+// items, captured values...) gives the results as a list (an array for an array)
+NATIVE(gpu_map) {
+    Value items = a[2];
+    if (isObjType(items, OT::Range)) {
+        auto* r = as<ObjRange>(items);
+        std::vector<Value> xs;
+        for (int64_t i = r->start; r->step > 0 ? (r->inclusive ? i <= r->end : i < r->end) : (r->inclusive ? i >= r->end : i > r->end);
+             i += r->step)
+            xs.push_back(Value::integer(i));
+        items = vm.newList(std::move(xs));
+    }
+    vm.extraRoots.push_back(items);
+    bool ints = isObjType(items, OT::List) && as<ObjList>(items)->lk() == LK_INTS;
+    if (!ints && isObjType(items, OT::List) && as<ObjList>(items)->lk() == LK_VALUES) {
+        ints = true;
+        for (size_t i = 0; i < as<ObjList>(items)->len(); i++)
+            if (!as<ObjList>(items)->get(i).isInt()) ints = false;
+    }
+    int kid = (int)(ints && a[1].i >= 0 ? a[1].i : a[0].i);
+    GpuKernel* k = gpuKernel(kid);
+    if (!k) vm.panic("internal: unknown gpu map kernel");
+    Value src = makeBuffer(vm, &items, k->params[0].elem == GTy::Float, "gpu map");
+    vm.extraRoots.push_back(src);
+    Value count = Value::integer(static_cast<ObjGpuBuffer*>(src.o)->n);
+    Value dst = makeBuffer(vm, &count, k->params[1].elem == GTy::Float, "gpu map");
+    vm.extraRoots.push_back(dst);
+    std::vector<Value> args{Value::integer(kid), src, dst};
+    for (int i = 3; i < n; i++) args.push_back(a[i]);
+    gpu_launch(vm, args.data(), (int)args.size());
+    Value out = buf_list(vm, &dst, 1);
+    if (isArray(a[2])) as<ObjList>(out)->appendable = 1;
+    vm.extraRoots.resize(vm.extraRoots.size() - 3);
+    return out;
+}
 NATIVE(buf_upload) {
     fill(vm, bufferArg(vm, a[0], "upload"), a[1], "upload");
     return a[0];
+}
+NATIVE(buf_address) {  // for ffi: where the items are (raw memory: unsafe in strict code)
+    auto* b = bufferArg(vm, a[0], "address");
+    return Value::integer((int64_t)(uintptr_t)b->data);
 }
 NATIVE(buf_free) {
     auto* b = bufferArg(vm, a[0], "free");
@@ -1042,9 +1877,37 @@ NATIVE(buf_free) {
 NATIVE(gpu_launch) {
     GpuKernel* k = gpuKernel((int)a[0].i);
     if (!k) vm.panic("internal: unknown gpu kernel");
-    Value* args = a + 1;
-    int argc = n - 1;
-    if (argc != (int)k->params.size()) vm.panic(k->name + "() takes " + std::to_string(k->params.size()) + " arguments");
+    // the gpu fn's arguments as the kernel's parameters: a vec or a mat is several floats
+    std::vector<Value> expanded;
+    size_t want = k->args.empty() ? k->params.size() - (k->dims ? 2 : 0) : k->args.size();
+    if ((size_t)(n - 1) != want) vm.panic(k->name + "() takes " + std::to_string(want) + " arguments");
+    if (k->args.empty()) {
+        expanded.assign(a + 1, a + n);
+    } else {
+        for (size_t i = 0; i < k->args.size(); i++) {
+            const auto& ga = k->args[i];
+            Value v = a[1 + i];
+            if (ga.kind == 1) {
+                if (!isObjType(v, OT::Vec) || as<ObjVec>(v)->v.size() != (size_t)ga.width)
+                    vm.panic("argument '" + ga.name + "' of gpu fn " + k->name + " should be a vec of " + std::to_string(ga.width));
+                for (double c : as<ObjVec>(v)->v) expanded.push_back(Value::number(c));
+            } else if (ga.kind == 2) {
+                if (!isObjType(v, OT::Mat) || as<ObjMat>(v)->rows != 4 || as<ObjMat>(v)->cols != 4)
+                    vm.panic("argument '" + ga.name + "' of gpu fn " + k->name + " should be a 4x4 mat");
+                for (double c : as<ObjMat>(v)->d) expanded.push_back(Value::number(c));
+            } else {
+                expanded.push_back(v);
+            }
+        }
+    }
+    int64_t dimW = pendingW, dimH = pendingH;
+    pendingW = pendingH = 0;
+    if (k->dims) {  // filled in below, once the thread count is known
+        expanded.push_back(Value::integer(0));
+        expanded.push_back(Value::integer(0));
+    }
+    Value* args = expanded.data();
+    int argc = (int)expanded.size();
     std::vector<ObjGpuBuffer*> bufs(k->params.size(), nullptr);
     std::vector<GWord> init;
     std::vector<uint32_t> words;
@@ -1053,6 +1916,15 @@ NATIVE(gpu_launch) {
     pendingThreads = 0;
     for (int i = 0; i < argc; i++) {
         const GParam& p = k->params[(size_t)i];
+        if (k->dims && i == argc - 2) {  // the launch's width and height
+            if (!sized) break;
+            if (dimW <= 0) {
+                dimW = threads;
+                dimH = 1;
+            }
+            args[i] = Value::integer(dimW);
+            args[i + 1] = Value::integer(dimH);
+        }
         Value v = args[i];
         std::string where = "argument '" + p.name + "' of gpu fn " + k->name;
         GWord w{};
@@ -1106,15 +1978,53 @@ NATIVE(gpu_launch) {
             if (!done && std::getenv("IXO_GPU_LOG")) std::fprintf(stderr, "gpu: %s ran on the CPU (%s)\n", k->name.c_str(), why.c_str());
         }
     }
+#ifdef __EMSCRIPTEN__
+    if (!done && threads > 0 && webgpuState != 2 && !std::getenv("IXO_GPU")) {
+        // WebGPU: the bindings are the buffers, the status words, then a uniform with the scalars, n and the stride
+        if (k->wgsl.empty()) k->wgsl = wgslFor(*k);
+        static int32_t flag = 0;
+        static int32_t status[4];
+        std::memset(status, 0, sizeof status);
+        uint32_t groupsN = (threads + 63) / 64, gx = std::min<uint32_t>(groupsN, 65535), gy = (groupsN + gx - 1) / gx;
+        std::vector<uint32_t> uniform = words;
+        uniform.push_back(threads);
+        uniform.push_back(gx * 64);
+        std::vector<uint32_t> desc;
+        uint32_t nb = 0;
+        for (auto* b : bufs) nb += b != nullptr;
+        desc.push_back(nb);
+        for (auto* b : bufs)
+            if (b) {
+                desc.push_back((uint32_t)(uintptr_t)b->data);
+                desc.push_back(b->n * 4);
+            }
+        desc.push_back((uint32_t)(uintptr_t)uniform.data());
+        desc.push_back((uint32_t)uniform.size() * 4);
+        desc.push_back(gx);
+        desc.push_back(gy);
+        desc.push_back((uint32_t)(uintptr_t)status);
+        int r = ixo_webgpu_run(k->wgsl.data(), (int)k->wgsl.size(), desc.data(), (int)desc.size(), &flag);
+        if (r == 1) {
+            webgpuState = 1;
+            done = true;
+            if (status[0]) bad = (int64_t)(uint32_t)status[1] | ((int64_t)status[2] << 32);
+        } else {
+            webgpuState = 2;
+        }
+    }
+#endif
     if (!done && threads > 0) {
         std::atomic<int64_t> flag{-1};
-        CpuRun r{cpuCodeFor(*k), bufs, init, &flag};
+        CpuRun r{*k, cpuCodeFor(*k), bufs, init, &flag};
         runOnCpu(r, threads);
         bad = flag.load();
     }
     if (bad >= 0) {
         int b = (int)(bad >> 32);
         int32_t idx = (int32_t)(uint32_t)(bad & 0xFFFFFFFF);
+        if (b >= (int)k->params.size())
+            vm.panic("gpu fn " + k->name + ": index " + std::to_string(idx) + " is out of range for a shared array of length " +
+                     std::to_string(b - (int)k->params.size() < (int)k->shared.size() ? k->shared[(size_t)(b - (int)k->params.size())].second : 0));
         std::string name = b >= 0 && b < (int)k->params.size() ? k->params[(size_t)b].name : "a buffer";
         uint32_t len = b >= 0 && b < (int)bufs.size() && bufs[(size_t)b] ? bufs[(size_t)b]->n : 0;
         vm.panic("gpu fn " + k->name + ": index " + std::to_string(idx) + " is out of range for buffer '" + name +
@@ -1124,6 +2034,23 @@ NATIVE(gpu_launch) {
 }
 // gpu.launch(n, kernel, args...): n threads
 NATIVE(gpu_launch_n) {
+    if (isObjType(a[0], OT::Tuple)) {  // gpu.launch((w, h), f, ...) or (w, h, d): gpu.x, gpu.y, gpu.z
+        auto& t = as<ObjTuple>(a[0])->items;
+        int64_t total = 1;
+        if (t.size() < 2 || t.size() > 3) vm.panic("gpu.launch takes a count, or (width, height) or (width, height, depth)");
+        for (auto& d : t) {
+            if (!d.isInt() || d.i < 1) vm.panic("gpu.launch's sizes are ints from 1");
+            total *= d.i;
+        }
+        if (total > INT32_MAX) vm.panic("gpu.launch: too many threads");
+        pendingW = t[0].i;
+        pendingH = t[1].i;
+        if (!isObjType(a[1], OT::Closure) || as<ObjClosure>(a[1])->fn->gpuKernel < 0) vm.panic("gpu.launch expects a gpu fn");
+        pendingThreads = (uint32_t)total;
+        std::vector<Value> args(a + 2, a + n);
+        Value f = a[1];
+        return vm.callNested(f, args.data(), (int)args.size());
+    }
     if (!a[0].isInt() || a[0].i < 0 || a[0].i > INT32_MAX) vm.panic("gpu.launch expects a thread count first");
     if (!isObjType(a[1], OT::Closure) || as<ObjClosure>(a[1])->fn->gpuKernel < 0) vm.panic("gpu.launch expects a gpu fn");
     pendingThreads = (uint32_t)a[0].i;
@@ -1157,6 +2084,22 @@ int gpuCompile(FnDecl* fnd, std::string& err, int& line, int& col) {
     return (int)kernels().size() - 1;
 }
 
+int gpuCompileMap(FnDecl* lambda, const std::vector<std::pair<Decl*, GTy>>& captures, GTy elem, std::string& err, int& line,
+                  int& col, bool wide) {
+    auto k = std::make_unique<GpuKernel>();
+    KernelCompiler kc(*k);
+    kc.wide = wide;
+    if (!kc.compileMap(lambda, captures, elem)) {
+        err = kc.err.empty() ? "this lambda can't run on the GPU" : kc.err;
+        line = kc.errLine;
+        col = kc.errCol;
+        return -1;
+    }
+    std::lock_guard<std::mutex> g(kernelsLock);
+    kernels().push_back(std::move(k));
+    return (int)kernels().size() - 1;
+}
+
 GpuKernel* gpuKernel(int id) {
     std::lock_guard<std::mutex> g(kernelsLock);
     return id >= 0 && id < (int)kernels().size() ? kernels()[(size_t)id].get() : nullptr;
@@ -1164,12 +2107,14 @@ GpuKernel* gpuKernel(int id) {
 
 void registerGpu(VM& vm) {
     vm.defineNative("__gpu_launch", gpu_launch, 1, -1, "fn(int, any...) -> task", "Runs a gpu fn (what calling one does).");
+    vm.defineNative("__gpu_map", gpu_map, 3, -1, "fn(int, int, any, any...) -> list", "Runs gpu xs.map(...).");
     auto* g = vm.defineNamespace("gpu", "GPU compute: buffers and kernels written as gpu fn.");
     vm.nativeModules.push_back("gpu");
     vm.nsFunc(g, "floats", gpu_floats, 1, 1, "fn(any) -> gpu buffer", "A buffer of 32-bit floats: n zeros, or a list's numbers.");
     vm.nsFunc(g, "ints", gpu_ints, 1, 1, "fn(any) -> gpu buffer", "A buffer of 32-bit ints: n zeros, or a list's ints.");
     vm.nsFunc(g, "buffer", gpu_buffer, 1, 1, "fn(list) -> gpu buffer", "A buffer of a list's numbers: floats if any is a float, else ints.");
-    vm.nsFunc(g, "launch", gpu_launch_n, 2, -1, "fn(int, fn, any...) -> task", "Runs a gpu fn over n threads.");
+    vm.nsFunc(g, "launch", gpu_launch_n, 2, -1, "fn(any, fn, any...) -> task",
+              "Runs a gpu fn over n threads, or (width, height[, depth]) of them (gpu.x, gpu.y, gpu.z).");
     vm.nsFunc(g, "devices", gpu_devices, 0, 0, "fn() -> list[str]", "The GPUs found (empty: kernels run on the CPU).");
     vm.nsFunc(g, "device", gpu_device, 0, 0, "fn() -> str", "The GPU kernels run on, or \"cpu\".");
     vm.nsFunc(g, "index", gpu_index, 0, 0, "fn() -> int", "Inside a gpu fn: this thread's position (0 to n - 1).");
@@ -1179,6 +2124,10 @@ void registerGpu(VM& vm) {
     vm.defineMethod(Tag::GpuBuf, "list", buf_list, 0, 0, "fn() -> list", "The items as a list.");
     vm.defineMethod(Tag::GpuBuf, "upload", buf_upload, 1, 1, "fn(list) -> gpu buffer", "Replaces the items with a list's.");
     vm.defineMethod(Tag::GpuBuf, "free", buf_free, 0, 0, "fn()", "Frees the buffer now (the collector would later).");
+    vm.defineMethod(Tag::GpuBuf, "address", buf_address, 0, 0, "fn() -> int",
+                    "Where the items are in memory, for ffi calls (raw memory: in an unsafe block in strict code).");
+    vm.defineNative("__auto_map", gpu_auto_map, 3, -1, "fn(int, int, any, any...) -> any", "");
+    registerCuda(vm, g);
 }
 
 }  // namespace ixo

@@ -5,9 +5,9 @@ by_status = {}
 total = {}
 seen = {}
 for line in log
-    ip, method, path, status, ms = line.cut
-    by_status[status] = by_status.get(status, 0) + 1
-    total[path] = total.get(path, 0) + ms[..-2].int
-    seen[path] = seen.get(path, 0) + 1
+    _, _, path, status, ms = line.cut
+    by_status[status] += 1
+    total[path] += ms[..-2].int
+    seen[path] += 1
 for s in by_status.keys.sort -> print(s, by_status[s])
 for p in total.keys.sort_by(-total[_] / seen[_])[..3] -> print(p, f"{total[p] / seen[p]:.1f}")

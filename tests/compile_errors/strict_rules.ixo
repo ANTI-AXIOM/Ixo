@@ -1,0 +1,25 @@
+$strict
+# Strict code: the safety rules are errors, and parameters need a type unless the calls show it.
+fn find(names: list[str], target: str): int?
+    for i, name in names
+        if name == target -> return i
+    nil
+at = find(["a"], "b")
+print(at + 1)                              # expect error: a value that might be nil is used with '+'
+fs.write("strict.tmp", "hi")               # expect error: the error this can give is ignored
+_ = fs.write("strict.tmp", "hi")
+enum Color = Red | Blue
+fn name(c: Color) = match c                # expect error: this match doesn't handle Color.Blue
+    Red -> "red"
+fn twice(v) = v * 2                        # expect error: parameter 'v' of twice needs a type in strict code (twice is used as a value
+f = twice
+fn inc(w) = w + 1
+print(inc(2), name(Color.Red))
+seen = []
+par fn record(x: int)
+    seen.add(x)                            # expect error: a par task can't change the module variable 'seen'
+f2 = fs.open("strict.tmp")                 # expect error: bind what fs.open gives with use
+lib = ffi.load("c")                        # expect error: ffi.load reaches raw memory
+data P(x: int)
+pp = P(1)
+pp.x = 2                                   # expect error: can't change 'x': P is data

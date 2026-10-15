@@ -1,0 +1,10 @@
+# y = a * x + y on the GPU over a million floats, ten times; the sum of y.
+gpu fn saxpy(a: float, x: buffer[float], y: buffer[float])
+    i = gpu.index
+    y[i] = a * x[i] + y[i]
+
+n = 1_000_000
+x = gpu.floats((0..n).map((_ % 100).float))
+y = gpu.floats(n)
+for _ in 0..10 -> saxpy(2.0, x, y)
+print(y.list.sum)

@@ -40,7 +40,7 @@
       "end": "\"\"\""
     },
     "fn-def": {
-      "match": "\\b((?:fork|par)\\s+)?(fn)\\s+([A-Za-z_][A-Za-z0-9_]*!?|\\[\\]=?|==|<|\\*\\*|[-+*/%])(\\*)?",
+      "match": "\\b((?:(?:fork|par|unsafe|gpu)\\s+)+)?(fn)\\s+([A-Za-z_][A-Za-z0-9_]*!?|\\[\\]=?|==|<|\\*\\*|[-+*/%])(\\*)?",
       "captures": {
         "1": {
           "name": "keyword.control.fork.ixo"
@@ -57,7 +57,7 @@
       }
     },
     "class-def": {
-      "match": "\\b(class|interface|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)(\\*)?",
+      "match": "\\b(class|interface|enum|data(?=\\s+[A-Z]))\\s+([A-Za-z_][A-Za-z0-9_]*)(\\*)?",
       "captures": {
         "1": {
           "name": "storage.type.class.ixo"
@@ -281,7 +281,11 @@
       "patterns": [
         {
           "name": "keyword.control.ixo",
-          "match": "\\b(if|elif|else|while|for|in|match|return|break|continue|retry|with|tasks|fork|par|select|defer|use|as|todo)\\b"
+          "match": "\\b(if|elif|else|while|for|in|match|return|break|continue|retry|with|tasks|fork|par|select|defer|use|as|todo|unsafe)\\b"
+        },
+        {
+          "name": "keyword.control.ixo",
+          "match": "\\bgpu\\b(?=\\s+[A-Za-z_(\\[])"
         },
         {
           "name": "storage.type.ixo",

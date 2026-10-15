@@ -109,3 +109,17 @@ fn modneg(n)
             if b != 0 -> s += (a % b) * (b + 7) + a // b
     s
 print(modneg(400))                                   # expect: 29832
+
+# an int times a float, both read through calls (maps of strings), and int fields after the object
+rows = (0..3000).map({"u": f"{_ % 7 + 1}", "p": f"{_ % 11 + 0.5}"})
+fn mixmul(rs)
+    t = 0.0
+    for r in rs -> t += r["u"].int * r["p"].float
+    t
+print(mixmul(rows))                                  # expect: 65893.0
+class C(a, b)
+fn intfields(cs)
+    t = 0
+    for c in cs -> t += c.a * 3 + c.b
+    t
+print(intfields((0..3000).map(C(_, _ % 5))))         # expect: 13501500

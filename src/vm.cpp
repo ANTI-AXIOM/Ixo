@@ -12,8 +12,11 @@
 #include "profiler.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -85,6 +88,12 @@ VM::VM() {
     heapId = (uint16_t)nextHeapId.fetch_add(1);
     const char* jitEnv = std::getenv("IXO_JIT");
     jitOn = jitSupported() && !(jitEnv && std::string(jitEnv) == "0");
+    if (const char* sync = std::getenv("IXO_JIT_SYNC")) jitAsync = std::string(sync) == "0";
+    else jitAsync = true;
+    if (const char* ov = std::getenv("IXO_CHECK_OVERFLOW"); ov && std::string(ov) != "0") {
+        checkOverflow = true;
+        jitOn = false;  // (the machine code wraps)
+    }
     if (jitOn && heapId == 0 && std::getenv("IXO_JIT_STATS")) jitStats = new JitStats();
     startTime = monotonicSeconds();
     registerAllBuiltins(*this);
@@ -99,6 +108,7 @@ VM::VM() {
 }
 
 VM::~VM() {
+    jitStop();  // the compiler thread stops first: it reads functions
     delete jitStats;
     delete stepHook;
     for (Fiber* f : fibers) delete f;
@@ -885,7 +895,12 @@ void VM::execute(Fiber* f, size_t stopDepth) {
             TARGET(OP_ADD) {
                 Value b = STK[f->sp - 1], a = STK[f->sp - 2];
                 if (a.t == VT::Int && b.t == VT::Int) {
-                    STK[f->sp - 2] = Value::integer((int64_t)((uint64_t)a.i + (uint64_t)b.i));
+                    int64_t r;
+                    if (__builtin_add_overflow(a.i, b.i, &r) && checkOverflow) {
+                        SAVE();
+                        intOverflow('+', a.i, b.i);
+                    }
+                    STK[f->sp - 2] = Value::integer(r);
                 } else if (a.isNum() && b.isNum()) {
                     STK[f->sp - 2] = Value::number(a.num() + b.num());
                 } else {
@@ -898,7 +913,12 @@ void VM::execute(Fiber* f, size_t stopDepth) {
             TARGET(OP_SUB) {
                 Value b = STK[f->sp - 1], a = STK[f->sp - 2];
                 if (a.t == VT::Int && b.t == VT::Int) {
-                    STK[f->sp - 2] = Value::integer((int64_t)((uint64_t)a.i - (uint64_t)b.i));
+                    int64_t r;
+                    if (__builtin_sub_overflow(a.i, b.i, &r) && checkOverflow) {
+                        SAVE();
+                        intOverflow('-', a.i, b.i);
+                    }
+                    STK[f->sp - 2] = Value::integer(r);
                 } else if (a.isNum() && b.isNum()) {
                     STK[f->sp - 2] = Value::number(a.num() - b.num());
                 } else {
@@ -936,7 +956,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
         f->sp--;                                                                 \
         DISPATCH();                                                              \
     }
-            NUM_BINOP(OP_MUL, Value::integer((int64_t)((uint64_t)a.i * (uint64_t)b.i)), Value::number(x * y))
+            NUM_BINOP(OP_MUL, (SAVE(), Value::integer(checkedMul(a.i, b.i))), Value::number(x * y))
             NUM_BINOP(OP_LE, Value::boolean(a.i <= b.i), Value::boolean(x <= y))
             NUM_BINOP(OP_GT, Value::boolean(a.i > b.i), Value::boolean(x > y))
             NUM_BINOP(OP_GE, Value::boolean(a.i >= b.i), Value::boolean(x >= y))
@@ -972,7 +992,10 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 int8_t delta = (int8_t)READ_BYTE();
                 Value& v = STK[base + s];
                 if (v.t == VT::Int) {
-                    v.i = (int64_t)((uint64_t)v.i + (uint64_t)(int64_t)delta);
+                    if (__builtin_add_overflow(v.i, (int64_t)delta, &v.i) && checkOverflow) {
+                        SAVE();
+                        intOverflow('+', (int64_t)((uint64_t)v.i - (uint64_t)(int64_t)delta), delta);
+                    }
                 } else if (v.t == VT::Float) {
                     v.f += delta;
                 } else {
@@ -1379,6 +1402,11 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                         }
                     }
                     auto it = inst->cls->fieldIndex.find(s);
+                    if (it != inst->cls->fieldIndex.end() && inst->cls->isData) {
+                        SAVE();
+                        panic("can't change '" + symName(s) + "' of " + inst->cls->name +
+                              ": data records don't change; make a changed copy with .with(" + symName(s) + ": ...)");
+                    }
                     if (it != inst->cls->fieldIndex.end()) {
                         if (own) {
                             InlineCache& c = frame->closure->fn->ic[icx];
@@ -1674,7 +1702,12 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 uint8_t bop = READ_BYTE();
                 Value b = STK[f->sp - 1], a = STK[f->sp - 2];
                 if (bop == OP_ADD && a.t == VT::Int && b.t == VT::Int) {
-                    STK[f->sp - 2] = Value::integer((int64_t)((uint64_t)a.i + (uint64_t)b.i));
+                    int64_t r;
+                    if (__builtin_add_overflow(a.i, b.i, &r) && checkOverflow) {
+                        SAVE();
+                        intOverflow('+', a.i, b.i);
+                    }
+                    STK[f->sp - 2] = Value::integer(r);
                     f->sp--;
                     break;
                 }
@@ -1764,6 +1797,7 @@ void VM::execute(Fiber* f, size_t stopDepth) {
                 c->module = tmpl->module;
                 c->ctorArity = tmpl->ctorArity;
                 c->ctorMinArity = tmpl->ctorMinArity;
+                c->isData = tmpl->isData;
                 classById[c->id] = c;
                 PUSH(Value::object(c));
                 break;
@@ -2457,31 +2491,212 @@ std::string VM::runTest(Value fn) {
 // still holds pointers into it; it may not wait on flows or tasks.
 // ------------------------------------------------------------------ JIT
 
+void VM::intOverflow(char op, int64_t x, int64_t y) {
+    panic("integer overflow: " + std::to_string(x) + " " + op + " " + std::to_string(y) +
+          " doesn't fit in an int (ints wrap around; ixo test and IXO_CHECK_OVERFLOW=1 stop here instead)");
+}
+
 bool VM::jitShouldDemote(const ObjFunction* fn) const {
-    if (!fn->jit || !fn->jit->tier2) return false;
+    if (!fn->jit || !fn->jit->tier2 || fn->noTier2) return false;  // (demoted once: a failed recompile keeps its code)
     uint64_t fails = fn->jit->guessFails;
     return fails > 64 && fails * 16 > (uint64_t)fn->jitCalls + fn->osrEntries;
+}
+
+// ------------------------------------------------------------------ the compiler thread
+// Machine code is made on a thread of its own, so compiling never pauses the program
+// (IXO_JIT_SYNC=1: on the program's thread). Meanwhile the function keeps running in
+// the interpreter, or in the machine code it has; the new code is installed at the
+// next call or loop entry (jitInstall). The compile works from copies of what the
+// program changes as it runs: the type profile, the inline caches, the loop entries.
+// Functions with more bytecode than this compile on the compiler thread (the ones
+// whose compiles could pause the program for more than about 0.1 ms)
+constexpr size_t kAsyncCompileBytes = 600;
+
+struct JitJob {
+    ObjFunction* fn = nullptr;
+    ObjClosure* cl = nullptr;
+    std::vector<std::pair<uint32_t, int>> seeds;
+    std::vector<uint8_t> profile;
+    std::vector<InlineCache> ics;
+    bool noTier2 = false, demote = false;
+    const char* reason = "";
+    std::unique_ptr<JitCode> code;
+    bool ok = false;
+    std::string why;
+    double took = 0;
+};
+struct JitThread {
+    std::mutex m;
+    std::condition_variable cv;
+    std::deque<std::unique_ptr<JitJob>> todo, done;
+    std::atomic<bool> ready{false};
+    bool stop = false;
+    std::thread th;
+};
+
+static void jitWorkerLoop(JitThread* t, VM* vm) {
+    for (;;) {
+        std::unique_ptr<JitJob> job;
+        {
+            std::unique_lock<std::mutex> lk(t->m);
+            t->cv.wait(lk, [t] { return t->stop || !t->todo.empty(); });
+            if (t->stop) return;
+            job = std::move(t->todo.front());
+            t->todo.pop_front();
+        }
+        job->code = std::make_unique<JitCode>();
+        double t0 = monotonicSeconds();
+        job->ok = jitCompileFrom(job->fn, job->cl, *job->code, &job->why, job->seeds, vm, &job->profile, &job->ics, job->noTier2);
+        job->took = monotonicSeconds() - t0;
+        std::lock_guard<std::mutex> g(t->m);
+        t->done.push_back(std::move(job));
+        t->ready.store(true, std::memory_order_release);
+    }
+}
+
+void VM::jitEnqueue(ObjFunction* fn, ObjClosure* c, const char* why, bool demote) {
+    if (fn->jitQueued) return;
+    fn->jitQueued = true;
+    if (!jitThread) {
+        jitThread = new JitThread();
+        jitThread->th = std::thread(jitWorkerLoop, jitThread, this);
+    }
+    auto job = std::make_unique<JitJob>();
+    job->fn = fn;
+    job->cl = c;
+    job->seeds = fn->jitSeeds;
+    job->profile = fn->typeSeen;
+    job->ics = fn->ic;
+    job->noTier2 = fn->noTier2 || demote;
+    job->demote = demote;
+    job->reason = why;
+    extraRoots.push_back(Value::object(c));  // alive until its code is installed
+    std::lock_guard<std::mutex> g(jitThread->m);
+    jitThread->todo.push_back(std::move(job));
+    jitThread->cv.notify_one();
+}
+
+void VM::jitStop() {
+    if (!jitThread) return;
+    {
+        std::lock_guard<std::mutex> g(jitThread->m);
+        jitThread->stop = true;
+    }
+    jitThread->cv.notify_all();
+    jitThread->th.join();
+    delete jitThread;
+    jitThread = nullptr;
+}
+
+void VM::jitInstall() {
+    if (!jitThread || !jitThread->ready.load(std::memory_order_acquire)) return;
+    std::deque<std::unique_ptr<JitJob>> done;
+    {
+        std::lock_guard<std::mutex> g(jitThread->m);
+        done.swap(jitThread->done);
+        jitThread->ready.store(false, std::memory_order_relaxed);
+    }
+    static const bool log = std::getenv("IXO_JIT_LOG") != nullptr;
+    for (auto& job : done) {
+        ObjFunction* fn = job->fn;
+        fn->jitQueued = false;
+        for (size_t i = extraRoots.size(); i-- > 0;)
+            if (extraRoots[i].isObj() && extraRoots[i].o == job->cl) {
+                extraRoots.erase(extraRoots.begin() + (std::ptrdiff_t)i);
+                break;
+            }
+        if (jitStats) {
+            jitStats->compiles++;
+            jitStats->compileSeconds += job->took;
+        }
+        bool compiled = fn->jitState == 2 || fn->jitState == 4;
+        if (job->ok) {
+            jitRetire(fn->jit);
+            fn->jit = job->code.release();
+            if (!compiled) fn->jitState = 2;
+            jitAllowDirect(fn);
+            if (jitStats && fn->jit->tier2) jitStats->typed++;
+            if (jitStats && job->demote) jitStats->demoted++;
+            if (log && job->demote)
+                std::fprintf(stderr, "jit: %s compiled again without typed guesses (they kept failing)\n", fn->name.c_str());
+            else if (log)
+                std::fprintf(stderr, "jit: compiled %s in %.0f us (%s%s)\n", fn->name.c_str(), job->took * 1e6, job->reason,
+                             fn->jit->tier2 ? ", typed" : "");
+        } else if (compiled) {  // the code it has stays
+            if (log) std::fprintf(stderr, "jit: %s keeps its code (compiling it again didn't work: it %s)\n", fn->name.c_str(), job->why.c_str());
+        } else {
+            fn->jitState = 3;
+            jitAllowDirect(fn);
+            if (jitStats) jitStats->notes.push_back({fn, "isn't compiled: it " + job->why});
+            if (log || fn->wantJit) {
+                flushOut();
+                std::fprintf(stderr, "note: %s runs in the interpreter: the JIT can't compile it (it %s)\n", fn->name.c_str(),
+                             job->why.c_str());
+            }
+        }
+    }
+    jitRetire(nullptr);
+}
+
+// Code that was replaced may still be running deeper in the native stack: it's
+// freed (and its memory reused) once no machine code runs on this thread.
+void VM::jitRetire(JitCode* old) {
+    if (old) retiredCode.push_back(old);
+    if (jitActive == 0 && !retiredCode.empty()) {
+        for (JitCode* c : retiredCode) jitFreeCode(c);
+        retiredCode.clear();
+    }
 }
 
 void VM::jitDemote(ObjFunction* fn, ObjClosure* c) {
     fn->noTier2 = true;
     auto code = std::make_unique<JitCode>();
     std::string why;
-    // (the old code may still be running deeper in the native stack: it's kept)
     if (jitCompile(fn, c, *code, &why, fn->jitSeeds, this)) {
+        jitRetire(fn->jit);
         fn->jit = code.release();
         jitAllowDirect(fn);
         if (jitStats) jitStats->demoted++;
         if (std::getenv("IXO_JIT_LOG"))
             std::fprintf(stderr, "jit: %s compiled again without typed guesses (they kept failing)\n", fn->name.c_str());
+    } else if (std::getenv("IXO_JIT_LOG")) {
+        std::fprintf(stderr, "jit: %s keeps its typed code (compiling it without typed guesses failed: it %s)\n",
+                     fn->name.c_str(), why.c_str());
     }
 }
 
 bool VM::jitReady(Fiber* f, ObjClosure* c, int64_t seedAt, int seedDepth) {
     ObjFunction* fn = c->fn;
     if (isWorker || (debugger && !debugger->allowsJit()) || memProfiler || f->world || fn->heapId != heapId) return false;
+    jitInstall();
     bool compiled = fn->jitState == 2 || fn->jitState == 4;
-    if (compiled && jitShouldDemote(fn)) jitDemote(fn, c);
+    if (fn->jitQueued) return compiled;  // being compiled: what it has (or the interpreter) meanwhile
+    if (compiled && jitShouldDemote(fn)) {
+        if (jitAsync && fn->chunk.code.size() > kAsyncCompileBytes) {
+            fn->noTier2 = true;
+            jitEnqueue(fn, c, "without typed guesses", true);
+            return true;
+        }
+        jitDemote(fn, c);
+    }
+    // promotion: code made without types (too early to know them) is made again with
+    // them once the function has run a while
+    if (compiled && fn->jit && !fn->jit->tier2 && !fn->noTier2 && !fn->promoted && fn->jitCalls >= 1000 && !fn->typeSeen.empty()) {
+        fn->promoted = true;
+        if (jitAsync && fn->chunk.code.size() > kAsyncCompileBytes) {
+            jitEnqueue(fn, c, "promoted to typed", false);
+            return true;
+        }
+        auto code = std::make_unique<JitCode>();
+        std::string why;
+        if (jitCompile(fn, c, *code, &why, fn->jitSeeds, this) && code->tier2) {
+            jitRetire(fn->jit);
+            fn->jit = code.release();
+            jitAllowDirect(fn);
+        } else {
+            jitFreeCode(code.release());
+        }
+    }
     bool newSeed = seedAt >= 0 && (!compiled || fn->jit->relearn ||
                                    std::find(fn->jit->loopHeaders.begin(), fn->jit->loopHeaders.end(), (uint32_t)seedAt) ==
                                        fn->jit->loopHeaders.end());
@@ -2508,6 +2723,12 @@ bool VM::jitReady(Fiber* f, ObjClosure* c, int64_t seedAt, int seedDepth) {
         fn->jitSeeds.push_back({(uint32_t)seedAt, seedDepth});
         if (compiled) fn->jitRecompiles++;
     }
+    // big functions (the compiles that take long) go to the compiler thread; small ones
+    // compile here at once, in a few microseconds, rather than run interpreted meanwhile
+    if (jitAsync && fn->chunk.code.size() > kAsyncCompileBytes) {
+        jitEnqueue(fn, c, seedAt >= 0 ? "a hot loop" : fn->wantJit ? "$jit" : "called often", false);
+        return compiled;
+    }
     static const bool log = std::getenv("IXO_JIT_LOG") != nullptr;
     auto code = std::make_unique<JitCode>();
     std::string why;
@@ -2519,7 +2740,7 @@ bool VM::jitReady(Fiber* f, ObjClosure* c, int64_t seedAt, int seedDepth) {
         jitStats->compileSeconds += took;
     }
     if (ok) {
-        // (old machine code isn't running now: the interpreter is; it's kept, being small)
+        if (compiled) jitRetire(fn->jit);
         fn->jit = code.release();
         fn->jitState = 2;
         jitAllowDirect(fn);
@@ -2549,8 +2770,13 @@ bool VM::jitReady(Fiber* f, ObjClosure* c, int64_t seedAt, int seedDepth) {
 bool VM::jitTry(ObjClosure* c) {
     ObjFunction* fn = c->fn;
     if (isWorker || (debugger && !debugger->allowsJit()) || memProfiler || fn->heapId != heapId) return false;
+    jitInstall();
     if (fn->jitState == 2) return true;
     if (fn->jitState == 3 || fn->jitState == 4 || fn->noJit) return false;
+    if (jitAsync && fn->chunk.code.size() > kAsyncCompileBytes) {  // called from machine code: compiled soon
+        jitEnqueue(fn, c, "called from machine code", false);
+        return false;
+    }
     // called from machine code: the caller is hot, so compile right away
     auto code = std::make_unique<JitCode>();
     std::string why;
@@ -3014,6 +3240,11 @@ bool VM::runJit(Fiber* f, ObjFunction* fn, size_t base, uint64_t entry, JitCtx& 
             if (p) p->inJit--;
         }
     } inJit{profiler};
+    struct Active {  // replaced code isn't freed while this runs
+        int& n;
+        explicit Active(int& x) : n(x) { n++; }
+        ~Active() { n--; }
+    } active{jitActive};
     int r = jc.fn(f->stack + base, &ctx, entry);
     if (r != 0) {
         if (ctx.chainLen + 2 >= ctx.maxDepth && f->jitDepth < 2000) f->jitDepth = std::min(2000, f->jitDepth * 4);

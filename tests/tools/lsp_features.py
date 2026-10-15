@@ -143,6 +143,30 @@ def main():
             check(new_text == "n = 1\nok = not false and true\nfor i in 0..3 by 1 -> print(i)\n",
                   f"the whole file updated: {new_text!r}")
 
+        # strict code: its errors come with quick fixes
+        strict_uri = uri_of(os.path.join(ws, "strict.ixo"))
+        strict_text = ('$strict\nfs.write("a.txt", "x")\nf = fs.open("a.txt")\nfn g(v) = v\nh = g\n'
+                       'lib = ffi.load("c")\n')
+        c.notify("textDocument/didOpen", {"textDocument": {"uri": strict_uri, "languageId": "ixo", "version": 1,
+                                                           "text": strict_text}})
+        sd = c.read()
+        while sd.get("method") != "textDocument/publishDiagnostics" or sd["params"]["uri"] != strict_uri:
+            sd = c.read()
+        sdiags = sd["params"]["diagnostics"]
+
+        def strict_fix(substr):
+            d = next((d for d in sdiags if substr in d["message"]), None)
+            if not d:
+                return None
+            r = c.request("textDocument/codeAction", {"textDocument": {"uri": strict_uri}, "range": d["range"],
+                                                      "context": {"diagnostics": [d]}})
+            acts = [a for a in r["result"] if a["title"] == "Apply the suggested fix"]
+            return acts[0]["edit"]["changes"][strict_uri][0]["newText"] if acts else None
+        check(strict_fix("is ignored") == "_ = ", "strict: an ignored error gets _ = ")
+        check(strict_fix("bind what fs.open") == "use ", "strict: fs.open gets use")
+        check(strict_fix("needs a type in strict code") == ": any", "strict: a parameter gets : any")
+        check(strict_fix("reaches raw memory") == "unsafe -> ", "strict: ffi gets unsafe ->")
+
         r = c.request("textDocument/inlayHint", {"textDocument": {"uri": uri},
                                                   "range": {"start": {"line": 0, "character": 0}, "end": {"line": 40, "character": 0}}})
         labels = {(h["position"]["line"], h["label"]) for h in r["result"]}

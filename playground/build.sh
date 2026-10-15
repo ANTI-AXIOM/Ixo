@@ -46,7 +46,7 @@ fi
 echo "linking $OUT/ixo.js"
 em++ "${COMMON[@]}" "${SETTINGS[@]}" "${LINK[@]}" -o "$OUT/ixo.js" "$OBJ"/*.o
 if [ "$TARGET" = web ]; then
-  cp playground/index.html playground/runner.js playground/coi-serviceworker.js "$OUT/"
+  cp playground/index.html playground/runner.js playground/gpu-worker.js playground/coi-serviceworker.js "$OUT/"
   # the examples menu: programs from examples/ that need no other files
   node -e '
     const fs = require("fs");

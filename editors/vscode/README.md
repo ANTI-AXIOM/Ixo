@@ -54,6 +54,6 @@ configuration.
 ```sh
 cd editors/vscode
 npm install
-npx @vscode/vsce package      # creates ixo-lang-0.6.0.vsix
-code --install-extension ixo-lang-0.6.0.vsix
+npx @vscode/vsce package      # creates ixo-lang-1.0.0.vsix
+code --install-extension ixo-lang-1.0.0.vsix
 ```

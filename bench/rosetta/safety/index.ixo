@@ -1,0 +1,4 @@
+$strict
+# Planted mistake: an index out of range (on a fixed-size tuple).
+point = (3, 4)
+print(point[2])

@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Eqixo/Ixo/main/install.sh | sh
 #
 # Settings (environment variables):
-#   IXO_VERSION=v0.5.0     a specific release (default: the latest)
+#   IXO_VERSION=v1.0.0     a specific release (default: the latest)
 #   IXO_HOME=~/.ixo        where it goes (the binary lands in $IXO_HOME/bin)
 #   IXO_ARCHIVE=file.tgz   install from a downloaded archive instead
 set -eu

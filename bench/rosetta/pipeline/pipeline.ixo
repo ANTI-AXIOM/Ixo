@@ -1,0 +1,21 @@
+# A pipeline over flows: a producer, four workers squaring numbers, a consumer that sums.
+jobs = flow[int](256)
+results = flow[int](256)
+
+fn produce()
+    for i in 1..=100_000 -> i :> jobs
+    jobs.close
+
+fn work()
+    for n <: jobs -> n * n % 1000 :> results
+
+fn close_after(workers)
+    for w in workers -> w.await
+    results.close
+
+fork produce()
+workers = (0..4).map -> fork work()
+fork close_after(workers)
+total = 0
+for r <: results -> total += r
+print(total)

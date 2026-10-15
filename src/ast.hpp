@@ -152,6 +152,7 @@ struct Member : Expr {
     std::vector<ExprP> args;
     Decl* ufcs = nullptr;  // free function `name` visible here (UFCS fallback)
     bool ref = false;      // &obj.method: the bound method, never called
+    bool onGpu = false;    // gpu xs.map(fn(v) = ...): the lambda runs as a GPU kernel
     size_t nameEnd = 0;    // byte offset just after the name (fixes)
     Member(SrcPos p, ExprP o, std::string n, SrcPos np)
         : Expr(NK::Member, p), object(std::move(o)), name(std::move(n)), namePos(np) {}
@@ -248,6 +249,7 @@ struct Fork : Expr {
 
 struct ExprStmt : Stmt {
     ExprP expr;
+    bool discarded = false;  // _ = expr: the value (an error, say) is dropped on purpose
     ExprStmt(SrcPos p, ExprP e) : Stmt(NK::ExprStmt, p), expr(std::move(e)) {}
 };
 struct Assign : Stmt {
@@ -256,6 +258,7 @@ struct Assign : Stmt {
     BinOp op = BinOp::None;  // compound assignment operator
     TypeP annot;       // x: int = 5
     bool exported = false;  // limit* = 10 (module level)
+    bool useBinding = false;  // use f = fs.open(path): closed when the block ends
     Assign(SrcPos p, ExprP t, ExprP v) : Stmt(NK::Assign, p), target(std::move(t)), value(std::move(v)) {}
 };
 struct Destructure : Stmt {
@@ -291,6 +294,7 @@ struct IncDec : Stmt {
 };
 struct Block : Stmt {
     std::vector<StmtP> stmts;
+    bool unsafe = false;  // unsafe + block: raw memory (ffi) is allowed in strict code
     explicit Block(SrcPos p) : Stmt(NK::Block, p) {}
 };
 struct While : Stmt {
@@ -345,6 +349,8 @@ struct Param {
     ExprP def;
     bool mut = false;
     Decl* decl = nullptr;
+    std::vector<std::pair<std::string, SrcPos>> unpack;  // fn dist((x1, y1), ...): the names it unpacks into
+    size_t nameEnd = 0;  // byte offset just after the name (ixo fmt --annotate)
 };
 
 struct FnDecl : Stmt {
@@ -370,6 +376,7 @@ struct FnDecl : Stmt {
     Decl* decl = nullptr;
     ClassInfo* cls = nullptr;
     SrcPos endPos;
+    size_t sigEnd = 0;  // byte offset just after the parameters (or the name): where `: T` goes
     explicit FnDecl(SrcPos p) : Stmt(NK::FnDecl, p) {}
 };
 
@@ -391,6 +398,7 @@ struct ClassDecl : Stmt {
     std::vector<std::string> typeParams;                      // class Box[T]
     std::vector<FnDecl*> shared;  // methods it gets from interfaces (defaults) or its enum
     bool exported = false;
+    bool isData = false;  // data Point(x, y): an immutable record compared by its fields
     std::string doc;
     ClassInfo* info = nullptr;
     Decl* decl = nullptr;

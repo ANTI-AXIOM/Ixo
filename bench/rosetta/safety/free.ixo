@@ -1,0 +1,7 @@
+$strict
+# impossible: memory is freed by the collector once nothing uses it, so a use after free
+# can't be written; a gpu buffer freed by hand (.free) panics if used again.
+xs = [1, 2, 3]
+ys = xs
+xs = nil
+print(ys)

@@ -90,6 +90,7 @@ struct Encoder {
         switch (o->type) {
             case OT::String: n.s = static_cast<ObjString*>(o)->s; break;
             case OT::List:
+                n.flag = static_cast<ObjList*>(o)->appendable == 1;  // an array
                 for (Value x : SeqView(*static_cast<ObjList*>(o))) n.items.push_back(enc(x));
                 break;
             case OT::Tuple:
@@ -362,7 +363,10 @@ struct Decoder {
             switch (nd.type) {
                 case OT::Class: continue;
                 case OT::String: o = vm.str(nd.s); break;
-                case OT::List: o = vm.alloc<ObjList>(); break;
+                case OT::List:
+                    o = vm.alloc<ObjList>();
+                    if (nd.flag) o->appendable = 1;
+                    break;
                 case OT::Tuple: o = vm.newTupleN(nd.items.size()); break;
                 case OT::Set: o = vm.alloc<ObjSet>(); break;
                 case OT::Map: o = vm.alloc<ObjMap>(); break;

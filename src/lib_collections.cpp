@@ -165,6 +165,96 @@ NATIVE(l_take) {
     shrinkSparse(l);
     return x;
 }
+// for x in xs -> s += x compiled as one call (Compiler::trySumIdiom): the same
+// result as the loop: in order for floats; ints wrap (or stop at an overflow when
+// that's checked); packed ints add with SIMD
+NATIVE(n_sum_into) {
+    Value acc = a[0], seq = a[1];
+    auto add = [&](Value x) {
+        if (acc.t == VT::Int && x.t == VT::Int) {
+            int64_t r;
+            if (__builtin_add_overflow(acc.i, x.i, &r) && vm.checkOverflow) vm.intOverflow('+', acc.i, x.i);
+            acc = Value::integer(r);
+        } else if (acc.isNum() && x.isNum()) {
+            acc = Value::number(acc.num() + x.num());
+        } else {
+            acc = vm.binaryOp(OP_ADD, acc, x);
+        }
+    };
+    if (isObjType(seq, OT::List)) {
+        auto* l = as<ObjList>(seq);
+        if (l->lk() == LK_INTS && acc.t == VT::Int && !vm.checkOverflow)
+            return Value::integer((int64_t)((uint64_t)acc.i + (uint64_t)simdSumInts(l->ints.data(), l->ints.size())));
+        if (l->lk() == LK_FLOATS && acc.isNum()) {
+            double s = acc.num();
+            for (double x : l->floats) s += x;
+            return Value::number(s);
+        }
+        for (size_t i = 0; i < l->len(); i++) add(l->get(i));
+        return acc;
+    }
+    if (isObjType(seq, OT::Range)) {
+        auto* r = as<ObjRange>(seq);
+        if (r->step == 0) vm.panic("a range's step can't be 0");
+        for (int64_t i = r->start; r->step > 0 ? (r->inclusive ? i <= r->end : i < r->end) : (r->inclusive ? i >= r->end : i > r->end);
+             i += r->step)
+            add(Value::integer(i));
+        return acc;
+    }
+    for (Value x : toVector(vm, seq, "for")) add(x);
+    return acc;
+}
+
+// words.counts: how many times each item occurs, in first-seen order
+NATIVE(l_counts) {
+    std::vector<Value> items = toVector(vm, a[0], "counts");
+    auto* m = vm.alloc<ObjMap>();
+    Value keep = Value::object(m);
+    vm.extraRoots.push_back(keep);
+    for (auto& x : items) {
+        if (Value* c = m->find(x))
+            c->i++;
+        else
+            m->set(x, Value::integer(1));
+    }
+    vm.extraRoots.pop_back();
+    return keep;
+}
+
+// A binary min-heap kept in a plain list, as Python's heapq: heap_push / heap_pop.
+NATIVE(l_heap_push) {
+    auto* l = L(a[0]);
+    Value x = a[1];
+    l->push(x);
+    size_t i = l->len() - 1;
+    while (i > 0) {
+        size_t p = (i - 1) / 2;
+        Value pv = l->get(p);
+        if (vm.compare(x, pv) >= 0) break;
+        l->set(i, pv);
+        i = p;
+    }
+    l->set(i, x);
+    return a[0];
+}
+NATIVE(l_heap_pop) {
+    auto* l = L(a[0]);
+    size_t len = l->len();
+    if (!len) return Value();
+    Value top = l->get(0), x = l->pop();
+    if (--len) {
+        vm.extraRoots.push_back(top);  // comparisons may call Ixo `<` methods (and collect)
+        size_t i = 0;
+        for (size_t c; (c = 2 * i + 1) < len; i = c) {
+            if (c + 1 < len && vm.compare(l->get(c + 1), l->get(c)) < 0) c++;
+            if (vm.compare(l->get(c), x) >= 0) break;
+            l->set(i, l->get(c));
+        }
+        l->set(i, x);
+        vm.extraRoots.pop_back();
+    }
+    return top;
+}
 NATIVE(l_get) {
     auto* l = L(a[0]);
     if (!a[1].isNum()) vm.panic("list.get() needs an int index");
@@ -564,6 +654,28 @@ NATIVE(mp_get) {
     Value* v = M(a[0])->find(a[1]);
     return v ? *v : (n > 2 ? a[2] : Value());
 }
+// m[k] += v (and -=) on a map: a missing key starts out empty, so the result is v
+// (-v for -=): counts[w] += 1, totals[k] += 2.5, names[k] += "x", groups[k] += [x]
+NATIVE(mp_update) {
+    Value m = a[0], k = a[1], v = a[2];
+    int64_t op = a[3].i;
+    requireHashable(vm, k);
+    Value* cur = M(m)->find(k);
+    Value r;
+    if (cur) {
+        Value c = *cur;
+        r = vm.binaryOp((uint8_t)op, c, v);
+    } else if (op == OP_SUB && v.isNum()) {
+        r = v.isInt() ? Value::integer((int64_t)(0 - (uint64_t)v.i)) : Value::number(-v.f);
+    } else if (op == OP_ADD && isObjType(v, OT::List)) {
+        std::vector<Value> items = V(v).vec();
+        r = vm.newList(std::move(items));
+    } else {
+        r = v;
+    }
+    M(m)->set(k, r);
+    return r;
+}
 NATIVE(mp_set) {
     requireHashable(vm, a[1]);
     M(a[0])->set(a[1], a[2]);
@@ -680,6 +792,12 @@ void registerCollections(VM& vm) {
     vm.defineMethod(T_, "add", l_add, 1, 1, "fn(T) -> list[T]", "Appends an item (returns the list).");
     vm.defineMethod(T_, "push", l_add, 1, 1, "fn(T) -> list[T]", "Same as add.");
     vm.defineMethod(T_, "take", l_take, 0, 0, "fn() -> T?", "Removes and returns the last item (nil if empty).");
+    vm.defineNative("__sum_into", n_sum_into, 2, 2, "fn(num, any) -> num", "");
+    for (Tag t : {Tag::List, Tag::Tuple, Tag::Str, Tag::Range, Tag::Set})
+        vm.defineMethod(t, "counts", l_counts, 0, 0, "fn() -> map[any, int]",
+                        "How many times each item occurs, as a map in first-seen order: words.counts.");
+    vm.defineMethod(T_, "heap_push", l_heap_push, 1, 1, "fn(T) -> list[T]", "Adds an item to a list kept as a min-heap (a priority queue).");
+    vm.defineMethod(T_, "heap_pop", l_heap_pop, 0, 0, "fn() -> T?", "Removes and returns the smallest item of a list kept as a min-heap (nil if empty).");
     vm.defineMethod(T_, "pop", l_take, 0, 0, "fn() -> T?", "Same as take.");
     vm.defineMethod(T_, "get", l_get, 1, 2, "fn(int, any) -> T?", "The item at an index, or nil/default when out of range.");
     vm.defineMethod(T_, "set", l_set, 2, 2, "fn(int, T)", "Replaces the item at an index.");
@@ -741,6 +859,7 @@ void registerCollections(VM& vm) {
     Tag M_ = Tag::Map;
     vm.defineMethod(M_, "len", mp_len, 0, 0, "fn() -> int", "Number of entries.");
     vm.defineMethod(M_, "get", mp_get, 1, 2, "fn(K, any) -> V?", "Value for a key, or nil/default.");
+    vm.defineMethod(M_, "$update", mp_update, 3, 3, "fn(K, any, int) -> any", "");
     vm.defineMethod(M_, "set", mp_set, 2, 2, "fn(K, V)", "Sets the value for a key.");
     vm.defineMethod(M_, "drop", mp_drop, 1, 1, "fn(K) -> bool", "Removes a key; true if it was there.");
     vm.defineMethod(M_, "has", mp_has, 1, 1, "fn(K) -> bool", "True if the key is present.");

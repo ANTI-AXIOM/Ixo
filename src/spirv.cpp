@@ -32,9 +32,9 @@ enum : uint32_t {
     OpFOrdGreaterThan = 186, OpFOrdLessThanEqual = 188, OpFOrdGreaterThanEqual = 190,
     OpShiftRightArithmetic = 195, OpShiftLeftLogical = 196, OpBitwiseOr = 197, OpBitwiseXor = 198,
     OpBitwiseAnd = 199, OpLoopMerge = 246, OpSelectionMerge = 247, OpLabel = 248, OpBranch = 249,
-    OpBranchConditional = 250, OpReturn = 253, OpUnreachable = 255,
+    OpBranchConditional = 250, OpReturn = 253, OpUnreachable = 255, OpTypeArray = 28, OpControlBarrier = 224,
     // storage classes
-    SC_Input = 1, SC_PushConstant = 9, SC_StorageBuffer = 12, SC_Function = 7,
+    SC_Input = 1, SC_Workgroup = 4, SC_PushConstant = 9, SC_StorageBuffer = 12, SC_Function = 7,
     // decorations
     D_Block = 2, D_ArrayStride = 6, D_BuiltIn = 11, D_Binding = 33, D_DescriptorSet = 34, D_Offset = 35,
     BI_GlobalInvocationId = 28,
@@ -52,6 +52,7 @@ struct Spv {
         tPc, pPc, pPcI, pPcU, pPcF, pFnI, pFnF, pFnB, ext;
     uint32_t gid, pcVar, statusVar;
     std::vector<uint32_t> bufVar;  // by parameter index (0 for scalars)
+    std::vector<uint32_t> shVar, shElPtr;  // shared arrays: the variable, a pointer to one of its items
     std::vector<uint32_t> varPtr;  // by kernel variable
     uint32_t tid = 0;
     std::map<uint64_t, uint32_t> consts;
@@ -231,6 +232,19 @@ struct Spv {
         op(decor, OpDecorate, {statusVar, D_Binding, binding});
         pcVar = id();
         op(globals, OpVariable, {pPc, pcVar, SC_PushConstant});
+        for (auto& [elem, len] : k.shared) {  // arrays in the group's memory
+            uint32_t tArr = id(), pArr = id(), pEl = id(), v = id();
+            op(globals, OpTypeArray, {tArr, elem == GTy::Float ? tFloat : tInt, cUint(len)});
+            op(globals, OpTypePointer, {pArr, SC_Workgroup, tArr});
+            op(globals, OpTypePointer, {pEl, SC_Workgroup, elem == GTy::Float ? tFloat : tInt});
+            op(globals, OpVariable, {pArr, v, SC_Workgroup});
+            shVar.push_back(v);
+            shElPtr.push_back(pEl);
+        }
+    }
+    // a shared array's index in range?
+    uint32_t inShared(int s, uint32_t i) {
+        return bin(OpULessThan, tBool, un(OpBitcast, tUint, i), cUint(k.shared[(size_t)s].second));
     }
 
     uint32_t pcLoad(uint32_t member, uint32_t ptrType, uint32_t type) {
@@ -285,10 +299,49 @@ struct Spv {
                 op(body, OpArrayLength, {tUint, len, bufVar[(size_t)n.slot], 0});
                 return un(OpBitcast, tInt, len);
             }
+            case GNode::SLoad: {
+                uint32_t i = expr(*n.kids[0]);
+                bool f = k.shared[(size_t)n.slot].first == GTy::Float;
+                if (k.unchecked) {
+                    uint32_t p = id();
+                    op(body, OpAccessChain, {shElPtr[(size_t)n.slot], p, shVar[(size_t)n.slot], i});
+                    uint32_t v = id();
+                    op(body, OpLoad, {f ? tFloat : tInt, v, p});
+                    return v;
+                }
+                uint32_t tmp = id();
+                op(fnVars, OpVariable, {f ? pFnF : pFnI, tmp, SC_Function});
+                uint32_t ok = inShared(n.slot, i);
+                uint32_t yes = id(), no = id(), done = id();
+                op(body, OpSelectionMerge, {done, 0});
+                op(body, OpBranchConditional, {ok, yes, no});
+                label(yes);
+                uint32_t p = id();
+                op(body, OpAccessChain, {shElPtr[(size_t)n.slot], p, shVar[(size_t)n.slot], i});
+                uint32_t v = id();
+                op(body, OpLoad, {f ? tFloat : tInt, v, p});
+                op(body, OpStore, {tmp, v});
+                branch(done);
+                label(no);
+                op(body, OpStore, {tmp, f ? cFloat(0) : cInt(0)});
+                recordBad((int)k.params.size() + n.slot, i);
+                branch(done);
+                label(done);
+                uint32_t r = id();
+                op(body, OpLoad, {f ? tFloat : tInt, r, tmp});
+                return r;
+            }
             case GNode::Load: {
                 // through a variable: the value, or 0 (and the status) when out of range
                 uint32_t i = expr(*n.kids[0]);
                 bool f = k.params[(size_t)n.slot].elem == GTy::Float;
+                if (k.unchecked) {  // unsafe gpu fn: straight in
+                    uint32_t p = id();
+                    op(body, OpAccessChain, {f ? pElF : pElI, p, bufVar[(size_t)n.slot], cInt(0), i});
+                    uint32_t v = id();
+                    op(body, OpLoad, {f ? tFloat : tInt, v, p});
+                    return v;
+                }
                 uint32_t tmp = id();
                 op(fnVars, OpVariable, {f ? pFnF : pFnI, tmp, SC_Function});
                 uint32_t ok = inRange(n.slot, i);
@@ -413,10 +466,43 @@ struct Spv {
                 op(body, OpStore, {varPtr[(size_t)n.slot], v});
                 return;
             }
+            case GNode::Barrier:  // workgroup scope, acquire-release on the group's memory
+                op(body, OpControlBarrier, {cInt(2), cInt(2), cInt(0x108)});
+                return;
+            case GNode::SStore: {
+                uint32_t i = expr(*n.kids[0]);
+                uint32_t v = expr(*n.kids[1]);
+                if (k.unchecked) {
+                    uint32_t p = id();
+                    op(body, OpAccessChain, {shElPtr[(size_t)n.slot], p, shVar[(size_t)n.slot], i});
+                    op(body, OpStore, {p, v});
+                    return;
+                }
+                uint32_t ok = inShared(n.slot, i);
+                uint32_t yes = id(), no = id(), done = id();
+                op(body, OpSelectionMerge, {done, 0});
+                op(body, OpBranchConditional, {ok, yes, no});
+                label(yes);
+                uint32_t p = id();
+                op(body, OpAccessChain, {shElPtr[(size_t)n.slot], p, shVar[(size_t)n.slot], i});
+                op(body, OpStore, {p, v});
+                branch(done);
+                label(no);
+                recordBad((int)k.params.size() + n.slot, i);
+                branch(done);
+                label(done);
+                return;
+            }
             case GNode::Store: {
                 uint32_t i = expr(*n.kids[0]);
                 uint32_t v = expr(*n.kids[1]);
                 bool f = k.params[(size_t)n.slot].elem == GTy::Float;
+                if (k.unchecked) {
+                    uint32_t p = id();
+                    op(body, OpAccessChain, {f ? pElF : pElI, p, bufVar[(size_t)n.slot], cInt(0), i});
+                    op(body, OpStore, {p, v});
+                    return;
+                }
                 uint32_t ok = inRange(n.slot, i);
                 uint32_t yes = id(), no = id(), done = id();
                 op(body, OpSelectionMerge, {done, 0});
@@ -521,15 +607,22 @@ struct Spv {
             m++;
             slot++;
         }
-        uint32_t live = bin(OpULessThan, tBool, ut, nThreads);
-        uint32_t run = id(), done = id();
-        op(body, OpSelectionMerge, {done, 0});
-        op(body, OpBranchConditional, {live, run, done});
-        label(run);
-        stmt(*k.body);
-        branch(done);
-        label(done);
-        op(body, OpReturn, {});
+        if (k.groups) {
+            // whole groups run (barriers need every thread of the group): the kernel checks its own indexes
+            (void)nThreads;
+            stmt(*k.body);
+            if (!ended) op(body, OpReturn, {});
+        } else {
+            uint32_t live = bin(OpULessThan, tBool, ut, nThreads);
+            uint32_t run = id(), done = id();
+            op(body, OpSelectionMerge, {done, 0});
+            op(body, OpBranchConditional, {live, run, done});
+            label(run);
+            stmt(*k.body);
+            branch(done);
+            label(done);
+            op(body, OpReturn, {});
+        }
         // the module
         std::vector<uint32_t> out = {0x07230203u, 0x00010300u, 0, 0 /* bound */, 0};
         op(out, OpCapability, {1 /* Shader */});
@@ -595,6 +688,7 @@ struct Wgsl {
             case GNode::ThreadIdx: return "tid";
             case GNode::Len: return "i32(arrayLength(&b" + std::to_string(n.slot) + "))";
             case GNode::Load: return "ld" + std::to_string(n.slot) + "(" + expr(*n.kids[0]) + ")";
+            case GNode::SLoad: return "lds" + std::to_string(n.slot) + "(" + expr(*n.kids[0]) + ")";
             case GNode::Neg: return "(-" + expr(*n.kids[0]) + ")";
             case GNode::Not: return "(!" + expr(*n.kids[0]) + ")";
             case GNode::Math: {
@@ -654,6 +748,10 @@ struct Wgsl {
             case GNode::Store:
                 line("st" + std::to_string(n.slot) + "(" + expr(*n.kids[0]) + ", " + expr(*n.kids[1]) + ");");
                 return;
+            case GNode::SStore:
+                line("sts" + std::to_string(n.slot) + "(" + expr(*n.kids[0]) + ", " + expr(*n.kids[1]) + ");");
+                return;
+            case GNode::Barrier: line("workgroupBarrier();"); return;
             case GNode::Block:
                 for (auto& c : n.kids) stmt(*c);
                 return;
@@ -716,11 +814,31 @@ struct Wgsl {
             if (k.params[i].t == GTy::Buffer) {
                 const char* t = k.params[i].elem == GTy::Float ? "f32" : "i32";
                 std::string b = std::to_string(i), zero = k.params[i].elem == GTy::Float ? "0.0" : "0";
+                if (k.unchecked) {  // unsafe gpu fn: straight in
+                    h += "fn ld" + b + "(i: i32) -> " + t + " { return b" + b + "[i]; }\n";
+                    h += "fn st" + b + "(i: i32, v: " + t + ") { b" + b + "[i] = v; }\n";
+                    continue;
+                }
                 h += "fn ld" + b + "(i: i32) -> " + t + " {\n    if (u32(i) < arrayLength(&b" + b + ")) { return b" + b +
                      "[i]; }\n    bad(i, " + b + ");\n    return " + zero + ";\n}\n";
                 h += "fn st" + b + "(i: i32, v: " + t + ") {\n    if (u32(i) < arrayLength(&b" + b + ")) { b" + b +
                      "[i] = v; } else { bad(i, " + b + "); }\n}\n";
             }
+        for (size_t s = 0; s < k.shared.size(); s++) {  // arrays in the group's memory
+            const char* t = k.shared[s].first == GTy::Float ? "f32" : "i32";
+            std::string sn = std::to_string(s), len = std::to_string(k.shared[s].second);
+            std::string zero = k.shared[s].first == GTy::Float ? "0.0" : "0", code = std::to_string(k.params.size() + s);
+            h += "var<workgroup> sh" + sn + ": array<" + t + ", " + len + ">;\n";
+            if (k.unchecked) {
+                h += "fn lds" + sn + "(i: i32) -> " + t + " { return sh" + sn + "[i]; }\n";
+                h += "fn sts" + sn + "(i: i32, v: " + t + ") { sh" + sn + "[i] = v; }\n";
+            } else {
+                h += "fn lds" + sn + "(i: i32) -> " + t + " {\n    if (u32(i) < " + len + "u) { return sh" + sn + "[i]; }\n    bad(i, " +
+                     code + ");\n    return " + zero + ";\n}\n";
+                h += "fn sts" + sn + "(i: i32, v: " + t + ") {\n    if (u32(i) < " + len + "u) { sh" + sn + "[i] = v; } else { bad(i, " +
+                     code + "); }\n}\n";
+            }
+        }
         h += "fn idiv(a: i32, b: i32) -> i32 {\n"
              "    if (b == 0) { return 0; }\n"
              "    if (b == -1) { return -a; }\n"
@@ -738,7 +856,13 @@ struct Wgsl {
              "    if (x >= 2147483648.0) { return 2147483647; }\n"
              "    return i32(clamp(x, -2147483648.0, 2147483520.0));\n}\n\n";
         h += "@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) g: vec3<u32>) {\n";
-        h += "    let ut = g.x + g.y * P.stride;\n    if (ut >= P.n) { return; }\n    let tid = i32(ut);\n";
+        h += "    let ut = g.x + g.y * P.stride;\n";
+        // every binding counts as used (WebGPU's automatic layout leaves out unused ones)
+        for (size_t i = 0; i < k.params.size(); i++)
+            if (k.params[i].t == GTy::Buffer) h += "    _ = arrayLength(&b" + std::to_string(i) + ");\n";
+        h += "    _ = arrayLength(&status);\n    _ = P.n;\n";
+        if (!k.groups) h += "    if (ut >= P.n) { return; }\n";  // (groups run whole: barriers need every thread)
+        h += "    let tid = i32(ut);\n";
         for (size_t s2 = 0; s2 < k.vars.size(); s2++) h += "    var v" + std::to_string(s2) + ": " + ty(k.vars[s2]) + ";\n";
         int m = 0, slot = 0;
         for (auto& p : k.params) {

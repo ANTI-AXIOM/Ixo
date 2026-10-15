@@ -16,6 +16,7 @@ struct CompileOptions {
     bool compile = true;   // false: analysis only (check, LSP)
     bool isEntry = true;
     bool alwaysCheck = false;  // type-check even if names failed to resolve (editor support)
+    bool inferParams = false;  // give unannotated parameters what the calls pass (ixo fmt --annotate)
 };
 
 class Program : public ModuleHost {

@@ -128,8 +128,14 @@ private:
     void prepareStrBuilders(std::initializer_list<Node*> parts);
     bool growsGlobal(Decl* d);
     void compileForRecv(ForRecv* f);
-    void compileMember(Member* m, bool raw);
+    void compileMember(Member* m, bool raw = false);
+    void compileGpuMap(Member* m);
     bool tryInlineHof(Member* m);
+    FnDecl* inlinable(Expr* callee, size_t argc);
+    void compileInlineCall(Call* c, FnDecl* g);
+    bool constantLiteral(Expr* e, Value& out);
+    bool trySumIdiom(For* f);
+    std::unordered_set<FnDecl*> inlining;  // functions being inlined (no endless inlining)
     bool m_selfField(Member* m);
     void compileFork(Fork* f);
     void compileRegion(Region* r, bool wantValue);

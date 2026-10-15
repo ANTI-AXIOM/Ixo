@@ -179,6 +179,40 @@ ModuleUnit* Program::importModule(const std::string& dotted, const std::string& 
     return nullptr;
 }
 
+// strict = true in the ixo.toml of the file's project makes all its files strict
+static bool projectStrict(const std::string& file) {
+    static std::unordered_map<std::string, bool> cache;
+    namespace fsys = std::filesystem;
+    std::error_code ec;
+    fsys::path dir = fsys::absolute(fsys::path(file), ec).parent_path();
+    for (int depth = 0; depth < 32 && !dir.empty(); depth++) {
+        auto c = cache.find(dir.string());
+        if (c != cache.end()) return c->second;
+        fsys::path toml = dir / "ixo.toml";
+        if (fsys::exists(toml, ec)) {
+            std::string text;
+            bool on = false;
+            if (vfsRead(toml.string(), text)) {
+                size_t at = 0;
+                while (at < text.size()) {
+                    size_t nl = text.find('\n', at);
+                    std::string line = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+                    line.erase(std::remove_if(line.begin(), line.end(), [](char ch) { return ch == ' ' || ch == '\t' || ch == '\r'; }),
+                               line.end());
+                    if (line == "strict=true") on = true;
+                    if (nl == std::string::npos) break;
+                    at = nl + 1;
+                }
+            }
+            cache[dir.string()] = on;
+            return on;
+        }
+        if (dir == dir.parent_path()) break;
+        dir = dir.parent_path();
+    }
+    return false;
+}
+
 bool Program::analyze(ModuleUnit* u, Diagnostics& diags, CompileOptions o) {
     Lexer lexer(u->source, u->path, diags);
     auto tokens = lexer.tokenize();
@@ -186,6 +220,8 @@ bool Program::analyze(ModuleUnit* u, Diagnostics& diags, CompileOptions o) {
     po.prelude = u->isPrelude;
     Parser parser(std::move(tokens), u->path, diags, po);
     u->ast = parser.parseProgram();
+    u->strict = parser.strict || (!u->isPrelude && !u->path.empty() && u->path[0] != '<' && projectStrict(u->path));
+    u->inferParams = u->strict || o.inferParams;
     int before = diags.errorCount;
     u->resolving = true;
     Resolver resolver(*u, diags, *this);

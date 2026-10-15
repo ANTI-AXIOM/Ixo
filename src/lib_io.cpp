@@ -5,7 +5,9 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <cstdio>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -162,6 +164,78 @@ NATIVE(fs_read) {
     ss << f.rdbuf();
     return vm.vstr(ss.str());
 }
+// Open files (fs.open): handles of the File class in the prelude
+static std::mutex filesLock;
+static std::unordered_map<int64_t, std::FILE*> openFiles;
+static int64_t nextFile = 1;
+
+NATIVE(fs_open) {
+    const std::string& path = vm.argStr(a, 0, "fs.open")->s;
+    std::string mode = n > 1 && !a[1].isNil() ? vm.argStr(a, 1, "fs.open")->s : "r";
+    if (mode != "r" && mode != "w" && mode != "a")
+        vm.panic("fs.open: the mode is \"r\" (read), \"w\" (write, replacing) or \"a\" (append), not \"" + mode + "\"");
+#ifdef _WIN32
+    std::FILE* fp = _wfopen(P(path).c_str(), (mode == "r" ? L"rb" : mode == "w" ? L"wb" : L"ab"));
+#else
+    std::FILE* fp = std::fopen(path.c_str(), (mode + "b").c_str());
+#endif
+    if (!fp) return ioError(vm, path, mode == "r" ? "open" : "open for writing");
+    int ci = vm.builtinIndex("File");
+    if (ci < 0 || !isObjType(vm.builtins[ci].value, OT::Class)) vm.panic("internal: the File class is missing");
+    int64_t h;
+    {
+        std::lock_guard<std::mutex> g(filesLock);
+        h = nextFile++;
+        openFiles[h] = fp;
+    }
+    auto* cls = as<ObjClass>(vm.builtins[ci].value);
+    Value inst = Value::object(vm.newInstance(cls));
+    auto* o = as<ObjInstance>(inst);
+    auto set = [&](const char* field, Value v) {
+        auto it = cls->fieldIndex.find(vm.sym(field));
+        if (it != cls->fieldIndex.end()) o->fields[(size_t)it->second] = v;
+    };
+    set("handle", Value::integer(h));
+    set("path", vm.vstr(path));
+    set("mode", vm.vstr(mode));
+    return inst;
+}
+// fs.file_op(handle, op, text): 0 reads a line (nil at the end), 1 the rest, 2 writes, 3 closes
+NATIVE(fs_file_op) {
+    int64_t h = vm.argInt(a, 0, "fs.file_op"), op = vm.argInt(a, 1, "fs.file_op");
+    std::FILE* fp = nullptr;
+    {
+        std::lock_guard<std::mutex> g(filesLock);
+        auto it = openFiles.find(h);
+        if (it != openFiles.end()) fp = it->second;
+        if (op == 3 && fp) openFiles.erase(it);
+    }
+    if (op == 3) {
+        if (fp) std::fclose(fp);
+        return Value();
+    }
+    if (!fp) vm.panic("the file is closed");
+    if (op == 0 || op == 1) {
+        std::string s;
+        char buf[4096];
+        bool any = false;
+        while (std::fgets(buf, sizeof buf, fp)) {
+            any = true;
+            s += buf;
+            if (op == 0 && !s.empty() && s.back() == '\n') break;
+        }
+        if (op == 0) {
+            if (!any) return Value();
+            if (!s.empty() && s.back() == '\n') s.pop_back();
+            if (!s.empty() && s.back() == '\r') s.pop_back();
+        }
+        return vm.vstr(s);
+    }
+    const std::string& text = vm.argStr(a, 2, "fs.file_op")->s;
+    if (std::fwrite(text.data(), 1, text.size(), fp) != text.size()) return vm.newError("IO", "write failed");
+    return Value();
+}
+
 NATIVE(fs_read_bytes) {
     const std::string& path = vm.argStr(a, 0, "fs.read_bytes")->s;
     std::ifstream f(P(path), std::ios::binary);
@@ -686,6 +760,9 @@ void registerIO(VM& vm) {
     auto* f = vm.defineNamespace("fs", "Files and directories.");
     vm.nativeModules.push_back("fs");
     vm.nsFunc(f, "read", fs_read, 1, 1, "fn(str) -> str ! Error", "Reads a whole text file.");
+    vm.nsFunc(f, "open", fs_open, 1, 2, "fn(str, str?) -> File ! Error",
+              "Opens a file to read (\"r\", the default) line by line, or to write (\"w\") or append (\"a\"); close it, or bind it with use.");
+    vm.nsFunc(f, "file_op", fs_file_op, 2, 3, "fn(int, int, str?) -> any", "Used by File (fs.open).");
     vm.nsFunc(f, "read_bytes", fs_read_bytes, 1, 1, "fn(str) -> list[int] ! Error", "Reads a file as bytes.");
     vm.nsFunc(f, "write", fs_write, 2, 2, "fn(str, any) -> nil ! Error", "Writes (replaces) a file.");
     vm.nsFunc(f, "append", fs_append, 2, 2, "fn(str, any) -> nil ! Error", "Appends to a file.");

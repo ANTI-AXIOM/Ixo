@@ -270,6 +270,8 @@ public:
     // Machine code: compile c's function now if it's hot (no fiber needed). True if it has code.
     bool jitTry(ObjClosure* c);  // from machine code: compile c's function now (true if it has code)
     Value binaryOp(uint8_t op, Value a, Value b);  // arithmetic and comparisons (may panic)
+    Value arrayOp(uint8_t op, Value a, Value b);   // numeric arrays, item by item (array.cpp)
+    Value arrayIndex(Value arr, Value idx);        // xs[mask], xs[positions]
     void collectGarbage();
     bool collectNow();  // natives (gc()): collect if it's safe right now
     size_t bytesAllocated = 0;
@@ -399,6 +401,25 @@ public:
     bool isWorker = false;
     class ParRuntime* ensurePar();  // starts the par worker threads if needed
     bool jitOn = false;  // IXO_JIT=0 turns the JIT off
+    // The compiler thread (vm.cpp): machine code is made while the program runs on, and
+    // installed at the next call or loop entry. IXO_JIT_SYNC=1: compiled on this thread.
+    struct JitThread* jitThread = nullptr;
+    bool jitAsync = false;
+    int jitActive = 0;  // machine code running on this thread (nested calls count)
+    std::vector<struct JitCode*> retiredCode;  // replaced code: freed once none of it runs
+    void jitEnqueue(ObjFunction* fn, ObjClosure* c, const char* why, bool demote);
+    void jitInstall();
+    void jitStop();
+    void jitRetire(struct JitCode* old);
+    // ints wrap around; ixo test (and IXO_CHECK_OVERFLOW=1) stop at an overflow instead
+    bool checkOverflow = false;
+    bool noInline = false;  // debugging and profiling: calls stay calls (every function shows)
+    [[noreturn]] void intOverflow(char op, int64_t x, int64_t y);
+    int64_t checkedMul(int64_t x, int64_t y) {
+        int64_t r;
+        if (__builtin_mul_overflow(x, y, &r) && checkOverflow) intOverflow('*', x, y);
+        return r;
+    }
     // Machine code running one instruction (or a built-in) without stopping.
     int jitStep(JitCtx& ctx, Value* frameBase, JitOpSite& s);
     int jitFastOp(JitCtx& ctx, Value* frameBase, JitOpSite& s);  // common ones directly, else jitStep

@@ -77,13 +77,17 @@ def parse_expectations(path):
     return exp
 
 
+# GC stress marks the whole heap at every safe point, so big tests take minutes
+TIMEOUT = 300 if os.environ.get("IXO_GC_STRESS") else 30
+
+
 def run_test(ixo, path, exp):
     cmd = [ixo, path] + exp["args"]
     stdin = "\n".join(exp["stdin"]) + ("\n" if exp["stdin"] else "")
     try:
-        p = subprocess.run(cmd, input=stdin.encode(), capture_output=True, timeout=30, cwd=os.path.dirname(path))
+        p = subprocess.run(cmd, input=stdin.encode(), capture_output=True, timeout=TIMEOUT, cwd=os.path.dirname(path))
     except subprocess.TimeoutExpired:
-        return ["timed out after 30s"]
+        return [f"timed out after {TIMEOUT}s"]
     out = p.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
     err = p.stderr.decode("utf-8", "replace").replace("\r\n", "\n")
     lines = out.split("\n")

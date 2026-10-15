@@ -66,7 +66,7 @@ const BASE = `http://127.0.0.1:${server.address().port}/`;
 const PLAIN = `http://127.0.0.1:${plainServer.address().port}/`;
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ixo-chrome-"));
-const chrome = spawn(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-sandbox",
+const chrome = spawn(CHROME, ["--headless=new", "--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--no-first-run", "--no-sandbox",
   "--remote-debugging-port=0", "--user-data-dir=" + profile, "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
 // Chrome prints "DevTools listening on ws://..." once it's ready
 const browserWs = await new Promise((resolve, reject) => {
@@ -134,6 +134,9 @@ try {
   await runs("par, a loop and output",
     'par fn sq(x) = x * x\nt = sq(7)\nprint("hello", t.await)\nfor i in 1..=3\n    print(i)\n', "hello 49\n1\n2\n3\n", "done");
   await runs("a type error", 'x: int = "no"\n', "error", "exit code 1");
+  await runs("a gpu fn runs through WebGPU",
+    'gpu fn sq(xs: buffer[float])\n    i = gpu.index\n    xs[i] = xs[i] * xs[i]\nb = gpu.floats([1.0, 2.0, 3.0])\nsq(b)\nprint(b.list, gpu.device)\n',
+    "[1.0, 4.0, 9.0] webgpu", "done");
   await runs("a panic", 'print(1)\npanic("boom")\n', "panic: boom", "exit code 1");
   await runs("an endless loop can be stopped", "while true\n    x = 1\n", "stopped", "stopped", 10);
 
@@ -156,6 +159,24 @@ try {
   await waitStatus();
   const formatted = await evaluate("document.getElementById('code').value");
   report("format", formatted === "fn f(x) = x * 2\nprint(f(2))\n", JSON.stringify(formatted));
+
+  // ixo build --target wasm: a page that runs a program (its runtime: this playground's files)
+  const IXO = path.join(ROOT, "build", "release", process.platform === "win32" ? "ixo.exe" : "ixo");
+  const built = path.join(DIST, "_built_check");
+  if (fs.existsSync(IXO)) {
+    const src = path.join(os.tmpdir(), `ixo-web-${process.pid}.ixo`);
+    fs.writeFileSync(src, 'fn sq(x) = x * x\nprint("built", (1..=4).map(sq))\n');
+    execSync(`"${IXO}" build "${src}" --target wasm --runtime "${DIST}" -o "${built}"`, { stdio: "ignore" });
+    await send("Page.navigate", { url: `${BASE}_built_check/index.html` });
+    let got = "";
+    for (let i = 0; i < 60 && !got.includes("built"); i++) {
+      await sleep(250);
+      got = await text("out");
+    }
+    report("ixo build --target wasm runs in the browser", got.includes("built [1, 4, 9, 16]"), JSON.stringify(got));
+    fs.rmSync(built, { recursive: true, force: true });
+    fs.rmSync(src, { force: true });
+  }
 
   // without the headers: the service worker adds them and the page reloads once
   await send("Page.navigate", { url: `${PLAIN}?run#code=${b64('print("isolated")' + "\n")}` });

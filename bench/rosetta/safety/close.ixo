@@ -1,0 +1,4 @@
+$strict
+# Planted mistake: a forgotten close.
+f = fs.open("data.txt")?
+print(f.read_line)

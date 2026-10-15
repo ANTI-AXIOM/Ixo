@@ -464,7 +464,49 @@ ObjFunction* Compiler::compileModule(Block* program, bool isEntry, bool replValu
             bool required = false;
             for (auto& p : mf->params)
                 if (!p.def) required = true;
-            if (!required) {
+            bool callsMain = false;  // a program that calls main itself keeps doing so
+            for (auto& sp : program->stmts)
+                if (sp->kind == NK::ExprStmt) {
+                    Expr* e = static_cast<ExprStmt*>(sp.get())->expr.get();
+                    if (e->kind == NK::Call && static_cast<Call*>(e)->callee->kind == NK::Ident &&
+                        static_cast<Ident*>(static_cast<Call*>(e)->callee.get())->name == "main")
+                        callsMain = true;
+                }
+            int parser = vm.builtinIndex("__main_args");
+            if (!mf->params.empty() && !callsMain && parser >= 0) {
+                // the command line, parsed as main's parameters say: --top 3 for top: int = 10,
+                // --upper for upper: bool = false, positional values for parameters without defaults
+                std::vector<Value> spec{vm.vstr(mf->doc)};
+                for (auto& p : mf->params) {
+                    std::string kind = p.type ? p.type->str() : "";
+                    if (kind.empty() && p.def) {
+                        switch (p.def->kind) {
+                            case NK::IntLit: kind = "int"; break;
+                            case NK::FloatLit: kind = "float"; break;
+                            case NK::BoolLit: kind = "bool"; break;
+                            case NK::ListLit: kind = "list[str]"; break;
+                            default: kind = "str"; break;
+                        }
+                    }
+                    if (kind.empty()) kind = "str";
+                    spec.push_back(vm.vstr(p.name));
+                    spec.push_back(vm.vstr(kind));
+                    spec.push_back(Value::boolean(p.def != nullptr));
+                }
+                Value specV = vm.newList(std::move(spec));
+                emitGet(it->second, mf->pos);
+                for (size_t i = 0; i < mf->params.size(); i++) {
+                    emitOp(OP_GET_BUILTIN, +1);
+                    emitU16((uint16_t)parser);
+                    emitConst(specV);
+                    emitConst(Value::integer((int64_t)i));
+                    emitOp(OP_CALL, -2);
+                    emitByte(2);
+                }
+                emitOp(OP_CALL, -(int)mf->params.size());
+                emitByte((uint8_t)mf->params.size());
+                emitOp(OP_POP, -1);
+            } else if (!required && !callsMain) {
                 emitGet(it->second, mf->pos);
                 emitOp(OP_CALL, 0);
                 emitByte(0);
@@ -669,6 +711,7 @@ void Compiler::compileClass(ClassDecl* c) {
     auto* tmpl = vm.alloc<ObjClass>();
     tmpl->name = c->name;
     tmpl->module = mod.rt;
+    tmpl->isData = c->isData;
     if (ci) {
         tmpl->fields = ci->fields;
         for (size_t i = 0; i < ci->fields.size(); i++) tmpl->fieldIndex[vm.sym(ci->fields[i])] = (int)i;
@@ -1005,6 +1048,26 @@ void Compiler::compileAssign(Assign* a) {
         emitIC();
     } else if (t->kind == NK::Index) {
         auto* ix = static_cast<Index*>(t);
+        // counts[w] += 1 on a map: a missing key starts out empty (the map's $update method)
+        Type* ot = ix->object->type;
+        while (ot && (ot->k == Type::Optional || ot->k == Type::Result) && !ot->args.empty()) ot = ot->args[0];
+        if (ot && ot->k == Type::Map && (a->op == BinOp::Add || a->op == BinOp::Sub)) {
+            compileExpr(ix->object.get());
+            compileExpr(ix->index.get());
+            compileExpr(a->value.get());
+            emitConst(Value::integer(a->op == BinOp::Add ? OP_ADD : OP_SUB));
+            uint8_t k;
+            uint16_t idx;
+            fallbackFor(nullptr, k, idx);
+            emitOp(OP_INVOKE, -3);
+            emitU16((uint16_t)vm.sym("$update"));
+            emitByte(3);
+            emitByte(k);
+            emitU16(idx);
+            emitIC();
+            emitOp(OP_POP, -1);
+            return;
+        }
         compileExpr(ix->object.get());
         compileExpr(ix->index.get());
         emitOp(OP_DUP2, +2);
@@ -1044,12 +1107,19 @@ void Compiler::compileStmt(Stmt* s) {
             auto* d = static_cast<Destructure*>(s);
             SelfTargetSwap sw;
             for (auto& t : d->targets) sw.in(t);
-            compileExpr(d->value.get());
-            emitOp(OP_DESTRUCT, (int)d->targets.size() - 1);
-            emitByte((uint8_t)d->targets.size());
+            if (d->value->kind == NK::TupleLit && static_cast<TupleLit*>(d->value.get())->elems.size() == d->targets.size()) {
+                // a, b = x, y: the values go straight to the targets (the tuple never exists)
+                for (auto& x : static_cast<TupleLit*>(d->value.get())->elems) compileExpr(x.get());
+            } else {
+                compileExpr(d->value.get());
+                emitOp(OP_DESTRUCT, (int)d->targets.size() - 1);
+                emitByte((uint8_t)d->targets.size());
+            }
             for (size_t i = d->targets.size(); i-- > 0;) {
                 Expr* t = d->targets[i].get();
-                if (t->kind == NK::Ident) {
+                if (t->kind == NK::Ident && static_cast<Ident*>(t)->name == "_") {
+                    emitOp(OP_POP, -1);  // _ drops that value
+                } else if (t->kind == NK::Ident) {
                     emitSet(static_cast<Ident*>(t)->decl, t->pos);
                 } else if (t->kind == NK::Member) {
                     auto* m = static_cast<Member*>(t);
@@ -1281,6 +1351,7 @@ void Compiler::compileFor(For* f) {
             r->step = std::move(f->step);
         }
     }
+    if (trySumIdiom(f)) return;
     // for i, x in list / for k, v in map / for i, (a, b) in pairs
     bool keyed = (f->vars.size() == 2 && !f->destructure) || f->unpackItem;
     if (f->iter->kind == NK::Range && f->vars.size() == 1) {
@@ -1290,7 +1361,12 @@ void Compiler::compileFor(For* f) {
             return;
         }
     }
-    compileExpr(f->iter.get());
+    // for (dx, dy) in [(1, 0), (0, 1)]: a list of constants is made once, frozen, not each time the loop starts
+    Value lit;
+    if ((f->iter->kind == NK::ListLit || f->iter->kind == NK::TupleLit) && constantLiteral(f->iter.get(), lit))
+        emitConst(vm.freeze(lit));
+    else
+        compileExpr(f->iter.get());
     if (!keyed && f->vars.size() == 1) {
         compileForSeq(f);
         return;
@@ -1791,6 +1867,151 @@ static bool inlinableBody(Node* n) {
     return ok;
 }
 
+// ---------------------------------------------------------------- small functions in place
+// A call of a small function of this module is compiled where it is: the arguments
+// go into slots, the body uses them (no call, no frame). Small: a few nodes, no
+// returns, lambdas, defers or tasks, plain parameters, never reassigned.
+FnDecl* Compiler::inlinable(Expr* callee, size_t argc) {
+    static const bool off = [] {
+        const char* e = std::getenv("IXO_INLINE");
+        return e && e[0] == '0';
+    }();
+    if (off || callee->kind != NK::Ident || vm.debugger || vm.noInline) return nullptr;
+    auto* id = static_cast<Ident*>(callee);
+    Decl* d = id->decl;
+    if (id->selfMember || !d || d->kind != DeclKind::Fn || !d->isGlobal || d->assignCount > 1 || d->importFrom || !d->node ||
+        d->node->kind != NK::FnDecl || (d->module && d->module != &mod))
+        return nullptr;
+    auto* g = static_cast<FnDecl*>(d->node);
+    if (g->isLambda || g->isFork || g->isPar || g->isGpu || g->isMethod || g->selfFirst || !g->hasParamList || !g->hasBody ||
+        g->ret || !g->info || !g->body || !g->attrs.empty() || !g->typeParams.empty() || g->params.size() != argc ||
+        inlining.count(g) || (fs && fs->info && fs->info->node == g))  // (not into itself)
+        return nullptr;
+    for (auto& p : g->params)
+        if (p.def || p.type || p.mut || !p.decl || p.decl->captured || !p.unpack.empty()) return nullptr;
+    if (!inlinableBody(g->body.get())) return nullptr;
+    int nodes = 0;
+    std::function<void(Node*)> count = [&](Node* n) {
+        if (!n || nodes > 40) return;
+        nodes++;
+        forEachChild(n, count);
+    };
+    count(g->body.get());
+    return nodes <= 40 ? g : nullptr;
+}
+
+void Compiler::compileInlineCall(Call* c, FnDecl* g) {
+    size_t d0 = fs->depth;
+    // the variables it binds here may be bound already (an outer inlining): put back after
+    std::vector<std::pair<Decl*, size_t>> saved;
+    auto save = [&](Decl* d) {
+        auto it = fs->slotOf.find(d);
+        if (it != fs->slotOf.end()) saved.push_back({d, it->second});
+    };
+    for (auto& p : g->params) save(p.decl);
+    for (Decl* h : g->info->hoisted) save(h);
+    for (auto& a : c->args) compileExpr(a.get());
+    beginScope();
+    fs->scopeStarts.back() = d0;
+    for (size_t i = 0; i < g->params.size(); i++) bindSlot(*fs, g->params[i].decl, d0 + i);
+    for (Decl* h : g->info->hoisted) {
+        emitOp(OP_UNDEF, +1);
+        bindSlot(*fs, h, fs->depth - 1);
+    }
+    inlining.insert(g);
+    int savedLine = line;
+    compileBlock(g->body.get(), true);
+    line = savedLine;
+    inlining.erase(g);
+    endScope(true);  // the arguments and locals go; the value stays
+    for (auto& p : g->params) fs->slotOf.erase(p.decl);
+    for (Decl* h : g->info->hoisted) fs->slotOf.erase(h);
+    for (auto& [d, slot] : saved) fs->slotOf[d] = slot;
+}
+
+// A list or tuple of constants (numbers, strings, bools, nil, and lists or tuples of those) as one value
+bool Compiler::constantLiteral(Expr* e, Value& out) {
+    switch (e->kind) {
+        case NK::IntLit: out = Value::integer(static_cast<IntLit*>(e)->value); return true;
+        case NK::FloatLit: out = Value::number(static_cast<FloatLit*>(e)->value); return true;
+        case NK::BoolLit: out = Value::boolean(static_cast<BoolLit*>(e)->value); return true;
+        case NK::NilLit: out = Value(); return true;
+        case NK::StrLit: out = vm.vstr(static_cast<StrLit*>(e)->value); return true;
+        case NK::ListLit: case NK::TupleLit: {
+            auto& elems = e->kind == NK::ListLit ? static_cast<ListLit*>(e)->elems : static_cast<TupleLit*>(e)->elems;
+            if (elems.size() > 4096) return false;
+            std::vector<Value> items;
+            for (auto& x : elems) {
+                Value v;
+                // items that can change (lists) are made fresh each time: the loop may change them
+                if (x->kind == NK::ListLit || !constantLiteral(x.get(), v)) return false;
+                items.push_back(v);
+                vm.extraRoots.push_back(v);  // (made one by one: kept until the whole is)
+            }
+            out = e->kind == NK::ListLit ? vm.newList(items) : vm.newTuple(items);
+            vm.extraRoots.resize(vm.extraRoots.size() - items.size());
+            return true;
+        }
+        default: return false;
+    }
+}
+
+// for x in xs -> s += x, with s a number and xs numbers (a list or a range): one call
+// adds them all, in the same order (SIMD for packed ints). The loop variable isn't
+// seen after the loop, so nothing else changes.
+bool Compiler::trySumIdiom(For* f) {
+    if (f->vars.size() != 1 || f->destructure || f->unpackItem || f->jitHint || !f->body || f->body->stmts.size() != 1)
+        return false;
+    Stmt* s = f->body->stmts[0].get();
+    if (s->kind != NK::Assign) return false;
+    auto* a = static_cast<Assign*>(s);
+    if (a->op != BinOp::Add || a->annot || a->target->kind != NK::Ident || a->value->kind != NK::Ident) return false;
+    auto* target = static_cast<Ident*>(a->target.get());
+    Decl* acc = target->decl;
+    Decl* item = static_cast<Ident*>(a->value.get())->decl;
+    if (target->selfMember || !acc || !item || item != f->vars[0].decl || acc == item || acc->annot) return false;
+    auto num = [](Type* t) { return t && (t->k == Type::Int || t->k == Type::Float || t->k == Type::Num); };
+    if (!num(acc->type)) return false;
+    Type* it = f->iter->type;
+    while (it && (it->k == Type::Optional || it->k == Type::Result) && !it->args.empty()) it = it->args[0];
+    if (!it || !(it->k == Type::Range || (it->k == Type::List && !it->args.empty() && num(it->args[0])))) return false;
+    int sum = vm.builtinIndex("__sum_into");
+    if (sum < 0) return false;
+    emitOp(OP_GET_BUILTIN, +1);
+    emitU16((uint16_t)sum);
+    emitGet(acc, a->pos);
+    compileExpr(f->iter.get());
+    emitOp(OP_CALL, -2);
+    emitByte(2);
+    emitSet(acc, a->pos);
+    return true;
+}
+
+// The variables a lambda uses from outside, as numbers for a kernel (typed as the checker saw them)
+static std::vector<std::pair<Decl*, GTy>> kernelCaptures(FnDecl* lam) {
+    Decl* param = lam->params.size() == 1 ? lam->params[0].decl : nullptr;
+    std::vector<std::pair<Decl*, GTy>> caps;
+    std::function<void(Node*)> walk = [&](Node* n) {
+        if (!n) return;
+        if (n->kind == NK::Ident) {
+            auto* id = static_cast<Ident*>(n);
+            Decl* d = id->decl;
+            if (d && d != param && (d->kind == DeclKind::Var || d->kind == DeclKind::Param)) {
+                bool seen = false;
+                for (auto& c : caps) seen |= c.first == d;
+                if (!seen) {
+                    Type* t = id->type;
+                    while (t && (t->k == Type::Optional || t->k == Type::Result) && !t->args.empty()) t = t->args[0];
+                    caps.push_back({d, t && t->k == Type::Int ? GTy::Int : t && t->k == Type::Bool ? GTy::Bool : GTy::Float});
+                }
+            }
+        }
+        forEachChild(n, walk);
+    };
+    if (lam->body) walk(lam->body.get());
+    return caps;
+}
+
 // self.x inside a method of the class that has field x: a fixed slot
 bool Compiler::m_selfField(Member* m) {
     return m->object->kind == NK::Ident && static_cast<Ident*>(m->object.get())->name == "self" && fs->cls &&
@@ -1809,8 +2030,12 @@ bool Compiler::tryInlineHof(Member* m) {
     if (kit == kinds.end() || hasNamed(m->args)) return false;
     int kind = kit->second;
     if (m->args.size() != (kind == Fold ? 2u : 1u)) return false;
-    if (m->args.back()->kind != NK::Lambda) return false;
-    FnDecl* lf = static_cast<Lambda*>(m->args.back().get())->fn.get();
+    // a lambda, or a small function of this module by name (xs.map(double))
+    FnDecl* lf = nullptr;
+    bool isLambda = m->args.back()->kind == NK::Lambda;
+    if (isLambda) lf = static_cast<Lambda*>(m->args.back().get())->fn.get();
+    else lf = inlinable(m->args.back().get(), kind == Fold ? 2 : 1);
+    if (!lf) return false;
     if (lf->params.size() > (kind == Fold ? 2u : 1u) || (kind == Fold && lf->params.size() != 2)) return false;
     for (auto& p : lf->params)
         if (p.def || p.type || !p.decl) return false;
@@ -1818,6 +2043,37 @@ bool Compiler::tryInlineHof(Member* m) {
 
     compileExpr(m->object.get());  // [r]
     size_t d0 = fs->depth;
+    // a map whose lambda only computes numbers, over a big list of numbers: every core
+    // works on it, with Ixo's own arithmetic (decided when it runs; else the loop below)
+    size_t autoJ = SIZE_MAX;
+    static const bool autoPar = [] {
+        const char* e = std::getenv("IXO_AUTO_PAR");
+        return !(e && e[0] == '0' && !e[1]);
+    }();
+    if (kind == Map && isLambda && lf->params.size() == 1 && autoPar && !vm.debugger && vm.builtinIndex("__auto_map") >= 0) {
+        auto caps = kernelCaptures(lf);
+        std::string err;
+        int l1 = 0, c1 = 0;
+        int kidF = gpuCompileMap(lf, caps, GTy::Float, err, l1, c1, true);
+        int kidI = gpuCompileMap(lf, caps, GTy::Int, err, l1, c1, true);
+        if (kidF >= 0 || kidI >= 0) {
+            emitOp(OP_GET_BUILTIN, +1);
+            emitU16((uint16_t)vm.builtinIndex("__auto_map"));
+            emitConst(Value::integer(kidF));
+            emitConst(Value::integer(kidI));
+            emitOp(OP_GET_LOCAL, +1);
+            emitU16((uint16_t)(d0 - 1));
+            for (auto& c : caps) emitGet(c.first, m->pos);
+            int argc = 3 + (int)caps.size();
+            emitOp(OP_CALL, -argc);
+            emitByte((uint8_t)argc);  // [r, result or undef]
+            emitOp(OP_JUMP_IF_SET, 0);
+            emitU16((uint16_t)(fs->depth - 1));
+            autoJ = chunk().code.size();
+            emitU32(0);
+            emitOp(OP_POP, -1);  // [r]: the loop
+        }
+    }
     size_t genericJ = emitJump(OP_JUMP_IF_NOT_SEQ, 0);
     if (kind == Each) emitOp(OP_DUP, +1);  // each gives back the collection
     emitOp(OP_SEQ_INIT, +1);  // a list walked by position (no iterator object), else its iterator
@@ -1852,7 +2108,9 @@ bool Compiler::tryInlineHof(Member* m) {
         emitOp(OP_UNDEF, +1);
         bindSlot(*fs, h, fs->depth - 1);
     }
+    inlining.insert(lf);
     compileBlock(lf->body.get(), true);  // [.., x, locals, v]
+    inlining.erase(lf);
     std::vector<size_t> early;
     auto leaveRound = [&]() {  // pop this round's slots without changing the compile-time depth
         size_t n = fs->depth - xSlot;
@@ -1954,10 +2212,50 @@ bool Compiler::tryInlineHof(Member* m) {
     emitU16(idx);
     emitIC();
     patchJump(endJ);
+    if (autoJ != SIZE_MAX) {  // done on every core: [r, result] -> [result]
+        size_t over = emitJump(OP_JUMP, 0);
+        patchJump(autoJ);
+        fs->depth = d0 + 1;
+        emitOp(OP_ENDSCOPE_KEEP, -1);
+        emitU16(1);
+        patchJump(over);
+    }
     return true;
 }
 
+// gpu xs.map(fn(v) = e): e becomes a kernel (one for float items, one for int items);
+// the variables it uses from outside are passed in as numbers
+void Compiler::compileGpuMap(Member* m) {
+    if (m->args.size() != 1 || m->args[0]->kind != NK::Lambda) {
+        error(m->pos, "gpu xs.map takes a lambda: gpu xs.map(fn(v) = v * v)");
+        return;
+    }
+    FnDecl* lam = static_cast<Lambda*>(m->args[0].get())->fn.get();
+    std::vector<std::pair<Decl*, GTy>> caps = kernelCaptures(lam);
+    std::string err, errI;
+    int el = 0, ec = 0, el2 = 0, ec2 = 0;
+    int kidF = gpuCompileMap(lam, caps, GTy::Float, err, el, ec);
+    int kidI = gpuCompileMap(lam, caps, GTy::Int, errI, el2, ec2);
+    if (kidF < 0 && kidI < 0) {
+        error(SrcPos{el ? el : m->pos.line, el ? ec : m->pos.col}, "gpu map: " + err);
+        return;
+    }
+    emitOp(OP_GET_BUILTIN, +1);
+    emitU16((uint16_t)vm.builtinIndex("__gpu_map"));
+    emitConst(Value::integer(kidF >= 0 ? kidF : kidI));
+    emitConst(Value::integer(kidI));
+    compileExpr(m->object.get());
+    for (auto& c : caps) emitGet(c.first, m->pos);
+    int argc = 3 + (int)caps.size();
+    emitOp(OP_CALL, -argc);
+    emitByte((uint8_t)argc);
+}
+
 void Compiler::compileMember(Member* m, bool raw) {
+    if (m->onGpu) {
+        compileGpuMap(m);
+        return;
+    }
     if (m->isCall && !raw && tryInlineHof(m)) return;
     uint8_t k;
     uint16_t idx;
@@ -2239,6 +2537,10 @@ void Compiler::compileExpr(Expr* e) {
                 compileMember(sm, false);
                 std::swap(sm->args, c->args);
                 sm->isCall = false;
+                break;
+            }
+            if (FnDecl* g = hasNamed(c->args) ? nullptr : inlinable(c->callee.get(), c->args.size())) {
+                compileInlineCall(c, g);
                 break;
             }
             compileExpr(c->callee.get());

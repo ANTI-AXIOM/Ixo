@@ -1,0 +1,72 @@
+# data records, one-line enums with short variant patterns, unpacking parameters, _ in
+# destructuring, chained comparisons, use, unsafe, _ = and the counting helpers.
+data Point(x: float, y: float)
+    fn len = (x * x + y * y).sqrt
+
+p = Point(3.0, 4.0)
+q = p.with(y: 0.0)
+print(p, q, p.len)                                   # expect: Point(x: 3.0, y: 4.0) Point(x: 3.0, y: 0.0) 5.0
+print(p == Point(3.0, 4.0), p != q)                  # expect: true true
+print({p: "seen"}[Point(3.0, 4.0)], {p, Point(3.0, 4.0)}.len)   # expect: seen 1
+print([p, q, Point(1.0, 9.0)].sort)                  # expect: [Point(x: 1.0, y: 9.0), Point(x: 3.0, y: 0.0), Point(x: 3.0, y: 4.0)]
+match q
+    Point(px, 0.0) -> print("on the x axis at", px)  # expect: on the x axis at 3.0
+    _ -> print("elsewhere")
+
+enum Shape = Circle(r) | Rect(w, h) | Empty
+fn area(s) = match s
+    Circle(r) -> 3 * r * r
+    Rect(w, h) -> w * h
+    Empty -> 0
+print([Shape.Circle(1), Shape.Rect(2, 3), Shape.Empty].map(area))   # expect: [3, 6, 0]
+
+fn dist((x1, y1), (x2, y2)) = ((x2 - x1) ** 2 + (y2 - y1) ** 2).sqrt
+print(dist((0, 0), (3, 4)), [(1, 2), (3, 4)].map(fn((a, b)) = a * b))   # expect: 5.0 [2, 12]
+ip, _, path, _ = "10.0.0.1 GET /index 200".cut
+print(ip, path)                                      # expect: 10.0.0.1 /index
+for (name, _) in [("a", 1), ("b", 2)] -> print(name)
+# expect: a
+# expect: b
+
+n = 5
+print(0 <= n < 10, 0 < n < 5, 1 < 2 < 3 < 4)         # expect: true false true
+
+class Res(name)
+    fn close
+        print("closed", name)
+fn work()
+    use r = Res("a")
+    print("using", r.name)
+    "done"
+print(work())
+# expect: using a
+# expect: closed a
+# expect: done
+
+fn save(file, lines)
+    use f = fs.open(file, "w")?
+    for l in lines -> f.write(l + "\n")
+fn count(file)
+    use f = fs.open(file)?
+    k = 0
+    while f.read_line != nil -> k += 1
+    k
+save("records.tmp", ["a", "b", "c"])?
+print(count("records.tmp"), fs.read("records.tmp")?.lines)   # expect: 3 ["a", "b", "c"]
+fs.drop("records.tmp")?
+print(fs.open("records.tmp") ! err -> err.kind)     # expect: NotFound
+
+unsafe
+    print("raw")                                     # expect: raw
+_ = fs.read("no such file")
+
+counts = {}
+for w in "a b a c a".cut -> counts[w] += 1
+print(counts, "a b a".cut.counts, "hello".counts["l"])   # expect: {"a": 3, "b": 1, "c": 1} {"a": 2, "b": 1} 2
+totals = {}
+totals["x"] += 1.5
+totals["x"] += 1.5
+print(totals)                                        # expect: {"x": 3.0}
+heap = []
+for v in [5, 1, 4, 2] -> heap.heap_push(v)
+print(heap.heap_pop, heap.heap_pop, heap.len)        # expect: 1 2 2

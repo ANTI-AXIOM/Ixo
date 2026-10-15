@@ -17,6 +17,7 @@ class Parser {
 public:
     Parser(std::vector<Token> tokens, std::string file, Diagnostics& diags, ParseOptions opts = {});
     std::unique_ptr<Block> parseProgram();
+    bool strict = false;  // $strict at the top of the file
     // Parses a single expression (f-string interpolation, REPL helpers).
     ExprP parseStandaloneExpr();
     // Parses a type written as text, e.g. "fn(str) -> int ! Error" (builtin
@@ -82,7 +83,13 @@ private:
     std::unique_ptr<Block> parseBlock(bool allowEmpty = false);
     std::unique_ptr<Block> parseStatementsUntilDedent(SrcPos p);
     std::unique_ptr<FnDecl> parseFnDecl(std::vector<std::string> attrs, bool isFork, bool inClass, bool isPar = false);
-    StmtP parseClass(bool exportedPrefix);
+    StmtP parseClass(bool isData);
+    void addDataMethods(ClassDecl* c);
+    void addUnpacks(FnDecl* fn);
+    ExprP cloneSimple(Expr* e);
+    std::unique_ptr<FnDecl> parseFnDeclInner(std::vector<std::string> attrs, bool isFork, bool inClass, bool isPar);
+    std::vector<StmtP> pending;  // statements that follow the one just parsed (use x = ...: its defer)
+    int unpackCount = 0;
     StmtP parseInterface();
     StmtP parseEnum();
     StmtP parseUse();

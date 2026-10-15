@@ -105,6 +105,8 @@ std::unique_ptr<Block> Parser::parseProgram() {
         try {
             auto s = parseStatement();
             if (s) block->stmts.push_back(std::move(s));
+            for (auto& q : pending) block->stmts.push_back(std::move(q));
+            pending.clear();
             endStatement();
         } catch (ParseError&) {
             synchronize();
@@ -139,6 +141,8 @@ std::unique_ptr<Block> Parser::parseStatementsUntilDedent(SrcPos p) {
         try {
             auto s = parseStatement();
             if (s) block->stmts.push_back(std::move(s));
+            for (auto& q : pending) block->stmts.push_back(std::move(q));
+            pending.clear();
             endStatement();
         } catch (ParseError&) {
             if (quiet > 0) throw;
@@ -280,6 +284,25 @@ StmtP Parser::parseStatement() {
         case T::At:
         case T::Dollar: return parseAttributed();
         case T::Ident:
+            if (peek().text == "data" && peek(1).kind == T::Ident && peek(2).kind == T::LParen) {  // data Point(x, y)
+                advance();
+                return parseClass(true);
+            }
+            if (peek().text == "unsafe" && peek(1).kind == T::Ident && peek(1).text == "gpu" && peek(2).kind == T::KwFn) {
+                // unsafe gpu fn: the device doesn't check its indexes
+                advance();
+                advance();
+                auto f = parseFnDecl({"$unsafe"}, false, false);
+                if (f) f->isGpu = true;
+                return f;
+            }
+            if (peek().text == "unsafe" &&
+                (peek(1).kind == T::Arrow || (peek(1).kind == T::Newline && peek(2).kind == T::Indent))) {
+                advance();
+                auto b = parseBlock();
+                b->unsafe = true;
+                return b;
+            }
             if (peek().text == "gpu" && peek(1).kind == T::KwFn && peek(2).kind == T::Ident) {  // gpu fn: a kernel
                 advance();
                 auto f = parseFnDecl({}, false, false);
@@ -339,6 +362,9 @@ StmtP Parser::parseAttributed() {
             if (name.text == "hot") {
                 deprecate(name, "$hot is $jit", {replaceTok(name, "jit")});
                 attrs.push_back("$jit");
+            } else if (name.text == "strict" && (check(T::Newline) || check(T::Eof))) {
+                strict = true;  // $strict: the whole file is checked strictly
+                return nullptr;
             } else {
                 attrs.push_back("$" + name.text);
             }
@@ -392,6 +418,12 @@ StmtP Parser::parseSimpleStatement() {
     };
     if (check(T::Assign)) {
         const Token& eq = advance();
+        if (e->kind == NK::Ident && static_cast<Ident*>(e.get())->name == "_") {
+            // _ = expr: the value (an error, say) is dropped on purpose
+            auto s = std::make_unique<ExprStmt>(p, parseExpr());
+            s->discarded = true;
+            return s;
+        }
         if (!isAssignTarget(e.get()) || (e->kind == NK::Member && static_cast<Member*>(e.get())->isCall))
             fail(eq, "can't assign to this expression");
         ExprP v = parseExpr();
@@ -466,9 +498,20 @@ void Parser::parseParams(std::vector<Param>& params, bool allowSelf) {
             const Token& t = advance();
             prm.name = "self";
             prm.pos = {t.line, t.col};
+        } else if (check(T::LParen)) {
+            // fn dist((x1, y1), (x2, y2)): the argument is unpacked into the names
+            const Token& lp = advance();
+            prm.name = "$arg" + std::to_string(unpackCount++);
+            prm.pos = {lp.line, lp.col};
+            do {
+                const Token& t = expect(T::Ident, "a name to unpack the argument into");
+                prm.unpack.push_back({t.text, SrcPos{t.line, t.col}});
+            } while (match(T::Comma));
+            expect(T::RParen, "')' after the names to unpack into");
         } else {
             const Token& t = expect(T::Ident, "a parameter name");
             prm.name = t.text;
+            prm.nameEnd = t.end;
             prm.pos = {t.line, t.col};
         }
         if (match(T::Colon)) prm.type = parseType();
@@ -510,7 +553,27 @@ std::string cleanDocstring(const std::string& raw) {
     return out.substr(a, b - a + 1);
 }
 
+// fn f((x, y)): the argument is unpacked at the start of the body
+void Parser::addUnpacks(FnDecl* fn) {
+    if (!fn || !fn->body) return;
+    size_t at = fn->doc.empty() ? 0 : 1;
+    for (auto it = fn->params.rbegin(); it != fn->params.rend(); ++it) {
+        if (it->unpack.empty()) continue;
+        auto d = std::make_unique<Destructure>(it->pos);
+        for (auto& [n, np] : it->unpack) d->targets.push_back(std::make_unique<Ident>(np, n));
+        d->value = std::make_unique<Ident>(it->pos, it->name);
+        size_t where = std::min(at, fn->body->stmts.size());
+        fn->body->stmts.insert(fn->body->stmts.begin() + (std::ptrdiff_t)where, std::move(d));
+    }
+}
+
 std::unique_ptr<FnDecl> Parser::parseFnDecl(std::vector<std::string> attrs, bool isFork, bool inClass, bool isPar) {
+    auto fn = parseFnDeclInner(std::move(attrs), isFork, inClass, isPar);
+    addUnpacks(fn.get());
+    return fn;
+}
+
+std::unique_ptr<FnDecl> Parser::parseFnDeclInner(std::vector<std::string> attrs, bool isFork, bool inClass, bool isPar) {
     const Token& kw = expect(T::KwFn, "'fn'");
     auto fn = std::make_unique<FnDecl>(SrcPos{kw.line, kw.col});
     if (inClass && !check(T::Ident)) {
@@ -596,11 +659,14 @@ std::unique_ptr<FnDecl> Parser::parseFnDecl(std::vector<std::string> attrs, bool
         fn->endPos = {prev().line, prev().col};
         return fn;
     }
+    fn->sigEnd = name.end;
     if (match(T::LParen)) {
         fn->hasParamList = true;
         parseParams(fn->params, opts.prelude);
         expect(T::RParen, "')' after the parameters");
+        fn->sigEnd = prev().end;
     }
+    if (check(T::Star) && !peek().spaceBefore) fn->sigEnd = 0;  // (an old spelling: no annotation goes there)
     if (check(T::StarAssign)) {
         const Token& sa = advance();
         if (!fn->exported)
@@ -670,9 +736,38 @@ std::unique_ptr<FnDecl> Parser::parseFnDecl(std::vector<std::string> attrs, bool
     return fn;
 }
 
-StmtP Parser::parseClass(bool) {
-    const Token& kw = expect(T::KwClass, "'class'");
+// data Point(x, y): p.with(x: 3) is a copy with some fields changed
+void Parser::addDataMethods(ClassDecl* c) {
+    for (auto& m : c->methods)
+        if (m->name == "with") return;
+    SrcPos p = c->namePos;
+    auto w = std::make_unique<FnDecl>(p);
+    w->name = "with";
+    w->namePos = p;
+    w->isMethod = true;
+    w->hasParamList = true;
+    w->exported = true;
+    w->doc = "A copy with the fields given by name changed: p.with(x: 3).";
+    auto call = std::make_unique<Call>(p, std::make_unique<Ident>(p, c->name));
+    for (auto& cp : c->ctorParams) {
+        Param prm;
+        prm.name = cp.name;
+        prm.pos = cp.pos;
+        if (cp.type) prm.type = parseTypeText(cp.type->str(), nullptr);
+        prm.def = std::make_unique<Member>(cp.pos, std::make_unique<Ident>(cp.pos, "self"), cp.name, cp.pos);
+        w->params.push_back(std::move(prm));
+        call->args.push_back(std::make_unique<Ident>(cp.pos, cp.name));
+    }
+    w->body = std::make_unique<Block>(p);
+    w->body->stmts.push_back(std::make_unique<ExprStmt>(p, std::move(call)));
+    w->endPos = p;
+    c->methods.push_back(std::move(w));
+}
+
+StmtP Parser::parseClass(bool isData) {
+    const Token& kw = isData ? prev() : expect(T::KwClass, "'class'");
     auto c = std::make_unique<ClassDecl>(SrcPos{kw.line, kw.col});
+    c->isData = isData;
     const Token& name = expect(T::Ident, "a class name");
     c->name = name.text;
     c->namePos = {name.line, name.col};
@@ -712,7 +807,10 @@ StmtP Parser::parseClass(bool) {
             c->interfaces.push_back({in.text, SrcPos{in.line, in.col}});
         } while (match(T::Comma));
     }
-    if (!(check(T::Newline) && peek(1).kind == T::Indent)) return c;  // empty class
+    if (!(check(T::Newline) && peek(1).kind == T::Indent)) {  // empty class
+        if (isData) addDataMethods(c.get());
+        return c;
+    }
     advance();
     advance();
     while (!check(T::Dedent) && !check(T::Eof)) {
@@ -732,6 +830,7 @@ StmtP Parser::parseClass(bool) {
             if (check(T::KwFn)) {
                 c->methods.push_back(parseFnDecl(attrs, isFork, true));
             } else if (check(T::Ident)) {
+                if (isData) fail(peek(), "a data record's fields are the names in its parentheses: data " + c->name + "(x, y)");
                 const Token& fname = advance();
                 FieldDecl fd;
                 fd.name = fname.text;
@@ -752,6 +851,7 @@ StmtP Parser::parseClass(bool) {
         }
     }
     expect(T::Dedent, "end of class body");
+    if (isData) addDataMethods(c.get());
     return c;
 }
 
@@ -799,6 +899,31 @@ StmtP Parser::parseEnum() {
     e->name = name.text;
     e->namePos = {name.line, name.col};
     if (match(T::Star)) e->exported = true;
+    auto variant = [&]() {
+        const Token& vn = expect(T::Ident, "a variant name");
+        EnumVariant v;
+        v.name = vn.text;
+        v.pos = {vn.line, vn.col};
+        v.cls = std::make_unique<ClassDecl>(SrcPos{vn.line, vn.col});
+        v.cls->name = e->name + "." + vn.text;
+        v.cls->namePos = {vn.line, vn.col};
+        v.cls->exported = true;
+        if (match(T::LParen)) {
+            v.unit = false;
+            v.cls->hasCtorParams = true;
+            parseParams(v.cls->ctorParams, false);
+            expect(T::RParen, "')'");
+        }
+        for (auto& other : e->variants)
+            if (other.name == v.name) fail(vn, "variant '" + v.name + "' is defined twice");
+        e->variants.push_back(std::move(v));
+    };
+    if (match(T::Assign)) {
+        // enum Shape = Circle(r: float) | Rect(w: float, h: float) | Empty
+        do variant();
+        while (match(T::Pipe));
+        if (!(check(T::Newline) && peek(1).kind == T::Indent)) return e;  // (methods may follow, indented)
+    }
     expect(T::Newline, "end of line after the enum name");
     expect(T::Indent, "the enum's variants, indented");
     while (!check(T::Dedent) && !check(T::Eof)) {
@@ -810,23 +935,7 @@ StmtP Parser::parseEnum() {
                 const Token& ds = advance();
                 if (e->doc.empty()) e->doc = cleanDocstring(ds.text);
             } else {
-                const Token& vn = expect(T::Ident, "a variant name");
-                EnumVariant v;
-                v.name = vn.text;
-                v.pos = {vn.line, vn.col};
-                v.cls = std::make_unique<ClassDecl>(SrcPos{vn.line, vn.col});
-                v.cls->name = e->name + "." + vn.text;
-                v.cls->namePos = {vn.line, vn.col};
-                v.cls->exported = true;
-                if (match(T::LParen)) {
-                    v.unit = false;
-                    v.cls->hasCtorParams = true;
-                    parseParams(v.cls->ctorParams, false);
-                    expect(T::RParen, "')'");
-                }
-                for (auto& other : e->variants)
-                    if (other.name == v.name) fail(vn, "variant '" + v.name + "' is defined twice");
-                e->variants.push_back(std::move(v));
+                variant();
             }
             endStatement();
         } catch (ParseError&) {
@@ -841,6 +950,20 @@ StmtP Parser::parseEnum() {
 
 StmtP Parser::parseUse() {
     const Token& kw = expect(T::KwUse, "'use'");
+    if (check(T::Ident) && peek(1).kind == T::Assign) {
+        // use f = fs.open(path): f is closed when the block ends, however it ends
+        const Token& name = advance();
+        advance();
+        SrcPos np{name.line, name.col};
+        auto a = std::make_unique<Assign>(SrcPos{kw.line, kw.col}, std::make_unique<Ident>(np, name.text), parseExpr());
+        a->useBinding = true;
+        auto d = std::make_unique<Defer>(np);
+        d->body = std::make_unique<Block>(np);
+        d->body->stmts.push_back(
+            std::make_unique<ExprStmt>(np, std::make_unique<Member>(np, std::make_unique<Ident>(np, name.text), "close", np)));
+        pending.push_back(std::move(d));
+        return a;
+    }
     auto u = std::make_unique<Use>(SrcPos{kw.line, kw.col});
     u->path.push_back(expect(T::Ident, "a module name after 'use'").text);
     while (match(T::Dot)) u->path.push_back(expect(T::Ident, "a module name after '.'").text);
@@ -1000,8 +1123,46 @@ ExprP Parser::parseNot() {
     return parseComparison();
 }
 
+// A copy of a simple expression (names, literals, fields, indexes and arithmetic on them), or null.
+ExprP Parser::cloneSimple(Expr* e) {
+    switch (e->kind) {
+        case NK::Ident: return std::make_unique<Ident>(e->pos, static_cast<Ident*>(e)->name);
+        case NK::IntLit: return std::make_unique<IntLit>(e->pos, static_cast<IntLit*>(e)->value);
+        case NK::FloatLit: return std::make_unique<FloatLit>(e->pos, static_cast<FloatLit*>(e)->value);
+        case NK::StrLit: return std::make_unique<StrLit>(e->pos, static_cast<StrLit*>(e)->value);
+        case NK::Member: {
+            auto* m = static_cast<Member*>(e);
+            if (m->isCall || !m->args.empty()) return nullptr;
+            ExprP o = cloneSimple(m->object.get());
+            return o ? std::make_unique<Member>(e->pos, std::move(o), m->name, m->namePos) : nullptr;
+        }
+        case NK::Index: {
+            auto* ix = static_cast<Index*>(e);
+            ExprP o = cloneSimple(ix->object.get()), i = cloneSimple(ix->index.get());
+            return o && i ? std::make_unique<Index>(e->pos, std::move(o), std::move(i)) : nullptr;
+        }
+        case NK::Unary: {
+            auto* u = static_cast<Unary*>(e);
+            ExprP o = cloneSimple(u->operand.get());
+            return o ? std::make_unique<Unary>(e->pos, u->op, std::move(o)) : nullptr;
+        }
+        case NK::Binary: {
+            auto* b = static_cast<Binary*>(e);
+            if (b->op == BinOp::And || b->op == BinOp::Or || b->op == BinOp::Send) return nullptr;
+            ExprP l = cloneSimple(b->left.get()), r = cloneSimple(b->right.get());
+            return l && r ? std::make_unique<Binary>(e->pos, b->op, std::move(l), std::move(r)) : nullptr;
+        }
+        default: return nullptr;
+    }
+}
+
 ExprP Parser::parseComparison() {
     ExprP left = parseRange();
+    // a < b < c is a < b and b < c (b is written once, as in maths)
+    auto chainable = [](BinOp o) {
+        return o == BinOp::Eq || o == BinOp::Ne || o == BinOp::Lt || o == BinOp::Le || o == BinOp::Gt || o == BinOp::Ge;
+    };
+    Expr* prevRight = nullptr;
     while (true) {
         SrcPos p = pos();
         BinOp op = BinOp::None;
@@ -1031,7 +1192,19 @@ ExprP Parser::parseComparison() {
         const Token& opTok = advance();
         if (opTok.kind == T::EqEqEq) deprecate(opTok, "'===' is 'is'", {replaceTok(opTok, spaced(opTok, "is"))});
         if (opTok.kind == T::NotEqEq) deprecate(opTok, "'!==' is 'is not'", {replaceTok(opTok, spaced(opTok, "is not"))});
-        left = std::make_unique<Binary>(p, op, std::move(left), parseRange());
+        ExprP right = parseRange();
+        Expr* r = right.get();
+        if (prevRight && chainable(op)) {
+            ExprP mid = cloneSimple(prevRight);
+            if (!mid)
+                fail(opTok, "in a chained comparison (a < b < c), the middle is used twice: write it as a name, a "
+                            "field, an index or arithmetic on those");
+            left = std::make_unique<Binary>(p, BinOp::And, std::move(left),
+                                            std::make_unique<Binary>(p, op, std::move(mid), std::move(right)));
+        } else {
+            left = std::make_unique<Binary>(p, op, std::move(left), std::move(right));
+        }
+        prevRight = chainable(op) ? r : nullptr;
     }
 }
 
@@ -1141,6 +1314,16 @@ ExprP Parser::parseMul() {
 
 ExprP Parser::parseUnary() {
     SrcPos p = pos();
+    if (check(T::Ident) && peek().text == "gpu" && peek(1).spaceBefore &&
+        (peek(1).kind == T::Ident || peek(1).kind == T::LParen || peek(1).kind == T::LBracket)) {
+        // gpu xs.map(fn(v) = v * v): a placement word, like fork and par
+        const Token& word = advance();
+        ExprP e = parsePostfix(parsePrimary());
+        if (e->kind != NK::Member || !static_cast<Member*>(e.get())->isCall || static_cast<Member*>(e.get())->name != "map")
+            fail(word, "gpu before an expression runs a map on the GPU: gpu xs.map(fn(v) = v * v)");
+        static_cast<Member*>(e.get())->onGpu = true;
+        return e;
+    }
     if (check(T::Amp)) {
         // &tick, &obj.method: the function itself (a function declared without
         // parentheses is otherwise called wherever its name is used)
@@ -1359,7 +1542,7 @@ ExprP Parser::parsePostfix(ExprP e) {
         } else if (check(T::Dot)) {
             SrcPos p = pos();
             advance();
-            const Token& name = check(T::KwSelf) ? advance() : expect(T::Ident, "a member name after '.'");
+            const Token& name = check(T::KwSelf) || check(T::KwWith) ? advance() : expect(T::Ident, "a member name after '.'");
             e = std::make_unique<Member>(p, std::move(e), name.text, SrcPos{name.line, name.col});
             static_cast<Member*>(e.get())->nameEnd = name.end;
         } else if (check(T::LBracket)) {
@@ -1670,6 +1853,7 @@ ExprP Parser::parseLambda() {
         throw;
     }
     arrowBody = savedArrow;
+    addUnpacks(fn.get());
     return std::make_unique<Lambda>(p, std::move(fn));
 }
 

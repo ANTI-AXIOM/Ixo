@@ -16,7 +16,7 @@ fn step(alive)
     counts = {}
     for cell in alive
         for n in neighbors(cell)
-            counts[n] = counts.get(n, 0) + 1
+            counts[n] += 1
     next = set()
     for cell, c in counts
         if c == 3 or (c == 2 and cell in alive) -> next.add(cell)

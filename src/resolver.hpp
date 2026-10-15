@@ -60,6 +60,7 @@ private:
     InterfaceInfo* findInterface(const std::string& name);
     void resolveEnum(EnumDecl* e);
     void resolvePattern(Pattern* p);
+    void shortVariant(Pattern* p);
     // In a method: is `name` a field or method of the enclosing class (or a
     // method of the interface / enum)? Then a bare `name` means self.name.
     bool selfMemberName(const std::string& name);

@@ -1,0 +1,15 @@
+# Numeric arrays: arithmetic and comparisons go item by item, a number standing for every item.
+xs = [1.0, 2.0, 3.0, 4.0].array
+ys = xs * 2.0 + 1
+print(xs, ys, type(ys))                  # expect: array([1.0, 2.0, 3.0, 4.0]) array([3.0, 5.0, 7.0, 9.0]) array
+print(xs[xs > 2.0], -xs)                 # expect: array([3.0, 4.0]) array([-1.0, -2.0, -3.0, -4.0])
+print((xs - 10).abs.max, xs.mean, xs.dot(xs), xs.sqrt[3])   # expect: 9.0 2.5 30.0 2.0
+i = (0..5).array
+print(i * i, i // 2, i / 2)              # expect: array([0, 1, 4, 9, 16]) array([0, 0, 1, 1, 2]) array([0.0, 0.5, 1.0, 1.5, 2.0])
+print(i[i % 2 == 0], i[[0, 4].array], i[1..3], i.sum)   # expect: array([0, 2, 4]) array([0, 4]) array([1, 2]) 10
+print(i == (0..5).array, i == [0, 1].array)              # expect: true false
+print(array(3), array(2, 7), [1, 2].array.list, [1, 2] * 2)   # expect: array([0.0, 0.0, 0.0]) array([7, 7]) [1, 2] [1, 2, 1, 2]
+big = array(3_000_000, 1.5)
+print((big * 2.0).sum, (big > 1.0).count(true))          # expect: 9000000.0 3000000
+print([1.0, 2.0].array + [1, 2].array)  # expect: array([2.0, 4.0])
+xs + [1.0].array                         # expect panic: the arrays have different lengths (4 and 1)

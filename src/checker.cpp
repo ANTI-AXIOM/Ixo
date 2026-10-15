@@ -35,7 +35,8 @@ static std::string typeToStringDepth(const Type* t, int depth) {
         case Type::Float: return "float";
         case Type::Num: return "num";
         case Type::Str: return "str";
-        case Type::List: return "list[" + (t->args.empty() ? std::string("any") : typeToString(t->args[0])) + "]";
+        case Type::List:
+            return (t->array ? "array[" : "list[") + (t->args.empty() ? std::string("any") : typeToString(t->args[0])) + "]";
         case Type::Set: return "set[" + (t->args.empty() ? std::string("any") : typeToString(t->args[0])) + "]";
         case Type::Flow: return "flow[" + (t->args.empty() ? std::string("any") : typeToString(t->args[0])) + "]";
         case Type::Iter: return "iter";
@@ -106,7 +107,86 @@ struct Checker::Impl {
     std::unordered_map<int, Type*> builtinTypes;
     std::unordered_set<std::string> reported;
 
+    // strict code ($strict, or strict = true in ixo.toml): no silent any, and the safety rules are errors
+    bool strict = false;
+    int unsafeDepth = 0;                              // inside unsafe blocks
+    std::unordered_map<Decl*, Type*> callArgTypes;    // what calls pass to an unannotated parameter
+    std::unordered_set<FnDecl*> escapedFns;           // functions used as values (not every call is seen)
+    std::unordered_map<const Param*, Type*> ctorArgTypes;  // what constructions pass to unannotated fields
+    void noteCtorArgs(ClassDecl* c, const std::vector<Type*>& args, const std::vector<Expr*>& argExprs) {
+        for (size_t i = 0; i < args.size() && i < argExprs.size(); i++) {
+            size_t pi = i;
+            if (argExprs[i]->kind == NK::NamedArg) {
+                pi = SIZE_MAX;
+                for (size_t k = 0; k < c->ctorParams.size(); k++)
+                    if (c->ctorParams[k].name == static_cast<NamedArg*>(argExprs[i])->name) pi = k;
+            }
+            if (pi >= c->ctorParams.size() || c->ctorParams[pi].type || !args[i]) continue;
+            Type*& slot = ctorArgTypes[&c->ctorParams[pi]];
+            slot = slot ? join(slot, args[i]) : args[i];
+        }
+    }
+
+    // An error with a quick fix (editors offer it): edits at byte offsets of this file
+    size_t offsetOf(SrcPos p) const {
+        const std::string& src = mod.source;
+        size_t off = 0;
+        for (int line = 1; line < p.line && off < src.size(); off++)
+            if (src[off] == '\n') line++;
+        return std::min(src.size(), off + (size_t)std::max(0, p.col - 1));
+    }
+    void errFix(SrcPos at, const std::string& msg, int len, std::vector<TextEdit> fix) {
+        size_t before = diags.list.size();
+        err(at, msg, len);
+        if (diags.list.size() > before) diags.list.back().fix = std::move(fix);
+    }
+    void insertFix(SrcPos at, const std::string& msg, int len, SrcPos where, const std::string& text) {
+        size_t o = offsetOf(where);
+        errFix(at, msg, len, {TextEdit{o, o, text}});
+    }
+    Stmt* curStmt = nullptr;  // the statement being checked (where unsafe -> goes)
+
+    // A nil check the code is missing: an error in strict code, a warning otherwise.
+    void nilProblem(SrcPos p, const std::string& msg, int len = 1) {
+        if (strict) err(p, msg, len);
+        else warn(p, msg, len);
+    }
+    bool inPar() const {
+        for (auto& f : fns)
+            if (f.fn && f.fn->isPar) return true;
+        return false;
+    }
+    void noteCallArgs(FnDecl* f, const std::vector<Type*>& args, const std::vector<Expr*>& argExprs) {
+        size_t first = f->selfFirst ? 1 : 0;
+        for (size_t i = 0; i < args.size() && i < argExprs.size(); i++) {
+            size_t pi = first + i;
+            if (argExprs[i]->kind == NK::NamedArg) {
+                pi = SIZE_MAX;
+                for (size_t k = 0; k < f->params.size(); k++)
+                    if (f->params[k].name == static_cast<NamedArg*>(argExprs[i])->name) pi = k;
+            }
+            if (pi >= f->params.size()) continue;
+            Param& p = f->params[pi];
+            if (p.type || !p.decl || !args[i]) continue;
+            Type*& slot = callArgTypes[p.decl];
+            slot = slot ? join(slot, args[i]) : args[i];
+        }
+    }
+    // A resource that must be bound with `use` in strict code
+    static const char* resourceCall(Expr* e) {
+        while (e && (e->kind == NK::Try || e->kind == NK::Catch))  // fs.open(path)? and fs.open(path) ! err -> ...
+            e = e->kind == NK::Try ? static_cast<Try*>(e)->expr.get() : static_cast<Catch*>(e)->expr.get();
+        if (!e || e->kind != NK::Member) return nullptr;
+        auto* m = static_cast<Member*>(e);
+        if (!m->isCall || m->object->kind != NK::Ident) return nullptr;
+        const std::string& ns = static_cast<Ident*>(m->object.get())->name;
+        if (ns == "fs" && m->name == "open") return "fs.open";
+        if (ns == "net" && m->name == "listen") return "net.listen";
+        return nullptr;
+    }
+
     Impl(Program& p, ModuleUnit& m, Diagnostics& d) : prog(p), mod(m), diags(d), vm(p.vm) {
+        strict = m.strict;
         // Reuse the module's arena: declarations from earlier REPL inputs point into it.
         if (mod.typeArena)
             arena = std::static_pointer_cast<TypeArena>(mod.typeArena);
@@ -146,6 +226,22 @@ struct Checker::Impl {
         return t;
     }
     Type* listOf(Type* e) { return mk1(Type::List, e); }
+    Type* arrayOf(Type* e) {
+        Type* t = mk1(Type::List, e);
+        t->array = true;
+        return t;
+    }
+    static bool isArrayT(Type* t) { return t && t->k == Type::List && t->array; }
+    // xs * 2.0, xs > 0: an array, item by item (bools for comparisons, floats for /)
+    Type* arrayResult(BinOp op, Type* l, Type* r) {
+        if (op == BinOp::Lt || op == BinOp::Le || op == BinOp::Gt || op == BinOp::Ge || op == BinOp::Eq || op == BinOp::Ne)
+            return arrayOf(tBool);
+        auto elem = [&](Type* t) { return isArrayT(t) && !t->args.empty() ? strip(t->args[0]) : t; };
+        Type* a = elem(l);
+        Type* b = elem(r);
+        bool ints = a && b && (a->k == Type::Int || a->k == Type::Bool) && (b->k == Type::Int || b->k == Type::Bool);
+        return arrayOf(op == BinOp::Div || !ints ? tFloat : tInt);
+    }
     Type* optional(Type* t) {
         if (!t || t->k == Type::Any || t->k == Type::Optional || t->k == Type::Nil) return t;
         return mk1(Type::Optional, t);
@@ -506,6 +602,7 @@ struct Checker::Impl {
         if (n == "bool") return tBool;
         if (n == "nil" || n == "void") return tNil;
         if (n == "list") return listOf(arg(0));
+        if (n == "array") return arrayOf(arg(0));
         if (n == "set") return mk1(Type::Set, arg(0));
         if (n == "flow") return mk1(Type::Flow, arg(0));
         if (n == "iter") return tIter;
@@ -519,7 +616,7 @@ struct Checker::Impl {
         if (n == "range") return tRange;
         if (n == "task") return tTask;
         if (n == "buffer") return tAny;  // gpu buffer[int] / buffer[float] (gpu fn parameters)
-        if (n == "vec") return tVec;
+        if (n == "vec" || n == "vec2" || n == "vec3" || n == "vec4") return tVec;  // (sized vecs: gpu fn parameters)
         if (n == "mat") return tMat;
         if (n == "quat") return tQuat;
         if (n == "rng") return tRng;
@@ -559,6 +656,13 @@ struct Checker::Impl {
         report = false;  // unknown names in builtin signatures are not the user's fault
         Type* t = te ? fromTypeExpr(te.get()) : tAny;
         report = saved;
+        if (t->k == Type::Result && !t->args.empty() && t->args[0] && t->args[0]->k == Type::Fn) {
+            // "fn(str) -> str ! Error" reads as (fn(str) -> str) ! Error: the error belongs to the result
+            Type* f = mk(Type::Fn);
+            *f = *t->args[0];
+            f->ret = result(f->ret ? f->ret : tAny);
+            t = f;
+        }
         if (t->k == Type::Fn) {
             Type* copy = mk(Type::Fn);
             *copy = *t;
@@ -686,7 +790,10 @@ struct Checker::Impl {
                 case Type::Set:
                 case Type::Flow: {
                     Type* e = join(a->args[0], b->args[0]);
-                    return e == a->args[0] ? a : mk1(a->k, e);
+                    if (e == a->args[0] && a->array == b->array) return a;
+                    Type* t = mk1(a->k, e);
+                    t->array = a->array && b->array;
+                    return t;
                 }
                 case Type::Map: {
                     Type* k = join(a->args[0], b->args[0]);
@@ -1262,9 +1369,17 @@ struct Checker::Impl {
                 if (mutates) borrowError(root, m->namePos, "calling ." + name + " (which changes it) isn't allowed");
             }
         }
+        if (strict && args && inPar() && recv) {
+            Ident* r = rootIdent(m->object.get());
+            if (r && r->decl && r->decl->isGlobal && r->decl->kind == DeclKind::Var && mutatingBuiltin(recv->k, name))
+                err(m->namePos, "a par task can't change the module variable '" + r->name +
+                                    "': each task works on its own copy, so the change would be lost (return the "
+                                    "value, or send it through a flow)",
+                    len);
+        }
         if (!recv || isVague(recv)) return tAny;
-        if (recvRaw && recvRaw->k == Type::Optional && recvRaw->declared && m->object->kind == NK::Ident)
-            warn(m->object->pos, "'" + static_cast<Ident*>(m->object.get())->name + "' might be nil here; check it first (if " +
+        if (recvRaw && recvRaw->k == Type::Optional && (recvRaw->declared || strict) && m->object->kind == NK::Ident)
+            nilProblem(m->object->pos, "'" + static_cast<Ident*>(m->object.get())->name + "' might be nil here; check it first (if " +
                                      static_cast<Ident*>(m->object.get())->name + " == nil -> ...)",
                  (int)static_cast<Ident*>(m->object.get())->name.size());
         // `T ! Error` values: error methods (.kind, .msg, ...) are fine too
@@ -1379,8 +1494,12 @@ struct Checker::Impl {
     // ---------------------------------------------------------- operators
 
     Type* arith(BinOp op, Type* lRaw, Type* rRaw, SrcPos pos) {
+        if (strict && ((lRaw && lRaw->k == Type::Optional) || (rRaw && rRaw->k == Type::Optional)))
+            err(pos, std::string("a value that might be nil is used with '") + binOpText(op) +
+                         "'; check it first (if x == nil -> ...)");
         Type* l = strip(lRaw);
         Type* r = strip(rRaw);
+        if (isArrayT(l) || isArrayT(r)) return arrayResult(op, l, r);
         if (isVague(l)) return tAny;
         if (l->k == Type::Instance || l->k == Type::Interface || l->k == Type::Enum) {
             const char* opName = nullptr;
@@ -1496,6 +1615,9 @@ struct Checker::Impl {
                 Decl* d = id->decl;
                 if (Type* n = d ? narrowedType(d) : nullptr) return n;
                 Type* t = declType(d);
+                if (!id->callee && d && d->kind == DeclKind::Fn && d->node && d->node->kind == NK::FnDecl &&
+                    static_cast<FnDecl*>(d->node)->hasParamList)
+                    escapedFns.insert(static_cast<FnDecl*>(d->node));
                 // fn version = "1": the name alone is a call
                 if (!id->callee && !id->ref && t && t->k == Type::Fn && fnAutoCalls(fnDeclOf(d)))
                     return t->ret ? t->ret : tAny;
@@ -1507,7 +1629,7 @@ struct Checker::Impl {
                 if (u->op == UnOp::Not) return tBool;
                 if (isVague(t)) return tAny;
                 if (u->op == UnOp::Neg) {
-                    if (t->k == Type::Int || t->k == Type::Float || t->k == Type::Num || t->k == Type::Vec) return t;
+                    if (t->k == Type::Int || t->k == Type::Float || t->k == Type::Num || t->k == Type::Vec || isArrayT(t)) return t;
                     if (FnDecl* f = opMethod(t, "neg")) return opResult(f, {}, u->pos, "-");
                     err(u->pos, "can't negate a " + typeToString(t));
                     return tAny;
@@ -1531,7 +1653,13 @@ struct Checker::Impl {
                     case BinOp::And:
                     case BinOp::Or: return join(l, r);
                     case BinOp::Eq:
-                    case BinOp::Ne:
+                    case BinOp::Ne: {
+                        Type* sl = strip(l);
+                        Type* sr = strip(r);
+                        auto num = [](Type* t) { return t && (t->k == Type::Int || t->k == Type::Float || t->k == Type::Num); };
+                        if ((isArrayT(sl) && num(sr)) || (isArrayT(sr) && num(sl))) return arrayOf(tBool);  // xs == 0: a mask
+                        return tBool;
+                    }
                     case BinOp::Is:
                     case BinOp::IsNot: return tBool;
                     case BinOp::In:
@@ -1546,6 +1674,7 @@ struct Checker::Impl {
                     case BinOp::Le:
                     case BinOp::Gt:
                     case BinOp::Ge:
+                        if (isArrayT(strip(l)) || isArrayT(strip(r))) return arrayResult(b->op, strip(l), strip(r));
                         if (!comparable(l, r)) err(b->pos, "can't compare " + typeToString(strip(l)) + " and " + typeToString(strip(r)));
                         return tBool;
                     case BinOp::Send: {
@@ -1575,6 +1704,13 @@ struct Checker::Impl {
                     argExprs.push_back(a.get());
                 }
                 Type* ct = expr(c->callee.get());
+                if (c->callee->kind == NK::Ident) {
+                    Decl* cd = static_cast<Ident*>(c->callee.get())->decl;
+                    if (cd && cd->kind == DeclKind::Fn && cd->node && cd->node->kind == NK::FnDecl)
+                        noteCallArgs(static_cast<FnDecl*>(cd->node), args, argExprs);
+                    if (cd && cd->kind == DeclKind::Class && cd->node && cd->node->kind == NK::ClassDecl)
+                        noteCtorArgs(static_cast<ClassDecl*>(cd->node), args, argExprs);
+                }
                 if (!c->typeArgs.empty() && c->callee->kind == NK::Ident) {
                     const std::string& n = static_cast<Ident*>(c->callee.get())->name;
                     Type* a0 = fromTypeExpr(c->typeArgs[0].get());
@@ -1613,6 +1749,11 @@ struct Checker::Impl {
             case NK::Member: {
                 auto* m = static_cast<Member*>(e);
                 Type* recv = expr(m->object.get());
+                if (strict && unsafeDepth == 0 && m->object->kind == NK::Ident &&
+                    static_cast<Ident*>(m->object.get())->name == "ffi" && static_cast<Ident*>(m->object.get())->decl &&
+                    static_cast<Ident*>(m->object.get())->decl->kind != DeclKind::Var)
+                    insertFix(m->namePos, "ffi." + m->name + " reaches raw memory: in strict code it goes in an unsafe block",
+                              (int)m->name.size(), curStmt ? curStmt->pos : m->pos, "unsafe -> ");
                 if (m->isCall) {
                     std::vector<Type*> args;
                     std::vector<Expr*> argExprs;
@@ -1620,6 +1761,13 @@ struct Checker::Impl {
                         args.push_back(expr(a.get()));
                         argExprs.push_back(a.get());
                     }
+                    if (Type* rt = strip(recv); rt && rt->k == Type::Instance && rt->cls) {
+                            auto mi = rt->cls->methods.find(m->name);
+                            if (mi != rt->cls->methods.end() && mi->second) noteCallArgs(mi->second, args, argExprs);
+                        } else if (rt && rt->k == Type::EnumDef && rt->en && rt->en->node) {  // Shape.Circle(2)
+                            for (auto& v : rt->en->node->variants)
+                                if (v.name == m->name && v.cls) noteCtorArgs(v.cls.get(), args, argExprs);
+                        }
                     return member(m, recv, &args, argExprs);
                 }
                 return member(m, recv, nullptr, {});
@@ -1635,7 +1783,10 @@ struct Checker::Impl {
                         err(x->index->pos, typeToString(o) + " index must be an int, got " + typeToString(i));
                 };
                 switch (o->k) {
-                    case Type::List: needInt(); return isRange ? o : o->args[0];
+                    case Type::List:
+                        if (o->array && i && i->k == Type::List) return o;  // xs[mask], xs[positions]
+                        needInt();
+                        return isRange ? o : o->args[0];
                     case Type::Tuple:
                         needInt();
                         if (isRange) return mk(Type::Tuple);
@@ -1896,7 +2047,12 @@ struct Checker::Impl {
         if (report) {
             std::string key = std::to_string(m->pos.line) + ":" + std::to_string(m->pos.col) + "enum";
             if (reported.insert(key).second)
-                diags.warning(mod.path, m->pos, "this match doesn't handle " + missing, 5);
+            {
+                if (strict)
+                    diags.error(mod.path, m->pos, "this match doesn't handle " + missing + " (add the cases, or _ -> ...)", 5);
+                else
+                    diags.warning(mod.path, m->pos, "this match doesn't handle " + missing, 5);
+            }
         }
         return false;
     }
@@ -1907,7 +2063,9 @@ struct Checker::Impl {
     Type* block(Block* b) {
         if (!b) return tNil;
         narrowed.emplace_back();
+        if (b->unsafe) unsafeDepth++;
         Type* last = blockInner(b);
+        if (b->unsafe) unsafeDepth--;
         narrowed.pop_back();
         return last;
     }
@@ -2015,8 +2173,15 @@ struct Checker::Impl {
 
     Type* blockInner(Block* b) {
         Type* last = tNil;
+        Stmt* outerStmt = curStmt;
+        struct Restore {
+            Stmt*& cur;
+            Stmt* saved;
+            ~Restore() { cur = saved; }
+        } restoreStmt{curStmt, outerStmt};
         for (size_t i = 0; i < b->stmts.size(); i++) {
             Stmt* s = b->stmts[i].get();
+            curStmt = s;
             bool isLast = i + 1 == b->stmts.size();
             if (s->kind == NK::ExprStmt) {
                 Expr* e = static_cast<ExprStmt*>(s)->expr.get();
@@ -2037,6 +2202,14 @@ struct Checker::Impl {
                     auto* m = static_cast<Member*>(e);
                     warn(m->namePos, "'." + m->name + "' does nothing here: call it with ." + m->name + "()",
                          (int)m->name.size());
+                }
+                if (strict && (!isLast || b == rootBlock)) {
+                    if (!static_cast<ExprStmt*>(s)->discarded && t && (t->k == Type::Result || t->k == Type::Error))
+                        insertFix(s->pos, "the error this can give is ignored: handle it with ?, ! or match, or write _ = ... "
+                                          "to drop it on purpose",
+                                  1, s->pos, "_ = ");
+                    if (const char* rc = resourceCall(e))
+                        err(s->pos, std::string("what ") + rc + " gives must be closed: bind it with use (use f = ...)");
                 }
                 if (isLast) last = t;
                 continue;
@@ -2062,6 +2235,10 @@ struct Checker::Impl {
             auto* id = static_cast<Ident*>(target);
             Decl* d = id->decl;
             if (!d) return;
+            if (strict && inPar() && d->isGlobal && d->kind == DeclKind::Var)
+                err(pos, "a par task can't change the module variable '" + id->name +
+                             "': each task works on its own copy, so the change would be lost (return the value, or "
+                             "send it through a flow)");
             forget(d);
             // x: str? = "a" makes x a str until it changes again
             if ((d->annot || annot) && vt && !isVague(vt) && vt->k != Type::Optional && vt->k != Type::Nil &&
@@ -2092,6 +2269,13 @@ struct Checker::Impl {
             if (o->k == Type::Instance && o->cls) {
                 ClassInfo* ci = o->cls;
                 auto fi = ci->fieldIndex.find(m->name);
+                if (ci->node && ci->node->isData && fi != ci->fieldIndex.end()) {
+                    err(m->namePos, "can't change '" + m->name + "': " + ci->name +
+                                        " is data, so its fields don't change; make a changed copy with .with(" +
+                                        m->name + ": ...)",
+                        (int)m->name.size());
+                    return;
+                }
                 if (fi == ci->fieldIndex.end()) {
                     err(m->namePos, ci->name + " has no field '" + m->name + "'" + suggest(m->name, ci->fields) +
                                         "; declare it in the class body (or set self." + m->name + " in init)",
@@ -2137,9 +2321,25 @@ struct Checker::Impl {
 
     void stmt(Stmt* s) {
         switch (s->kind) {
-            case NK::ExprStmt: expr(static_cast<ExprStmt*>(s)->expr.get()); break;
+            case NK::ExprStmt: {
+                auto* es = static_cast<ExprStmt*>(s);
+                Type* t = expr(es->expr.get());
+                if (strict && !es->discarded && t && (t->k == Type::Result || t->k == Type::Error))
+                    err(es->pos, "the error this can give is ignored: handle it with ?, ! or match, or write _ = ... "
+                                 "to drop it on purpose");
+                if (strict && resourceCall(es->expr.get()))
+                    err(es->pos, std::string("what ") + resourceCall(es->expr.get()) +
+                                     " gives must be closed: bind it with use (use f = ...)");
+                break;
+            }
             case NK::Assign: {
                 auto* a = static_cast<Assign*>(s);
+                if (strict && !a->useBinding && resourceCall(a->value.get()))
+                    insertFix(a->pos, std::string("bind what ") + resourceCall(a->value.get()) +
+                                          " gives with use, so it's closed when the block ends: use " +
+                                          (a->target->kind == NK::Ident ? static_cast<Ident*>(a->target.get())->name : "f") +
+                                          " = ...",
+                              1, a->pos, "use ");
                 SelfTargetSwap sw;
                 sw.in(a->target);
                 Type* vt = expr(a->value.get());
@@ -2356,6 +2556,36 @@ struct Checker::Impl {
         }
         for (auto& p : f->params)
             if (p.type) fromTypeExpr(p.type.get());  // reports unknown type names
+        if (mod.inferParams && !f->isLambda) {
+            // what an unannotated parameter is: its default, and what the calls in this file pass
+            for (auto& p : f->params) {
+                if (p.type || !p.decl || p.name == "self") continue;
+                std::string what = p.unpack.empty() ? "parameter '" + p.name + "'" : "the unpacked parameter";
+                if (strict && f->exported && !f->isMethod) {
+                    err(p.pos, what + " of the exported function " + f->name +
+                                   " needs a type: it's part of the module's contract (ixo fmt --annotate writes it)",
+                        (int)p.name.size());
+                    continue;
+                }
+                Type* t = p.def ? strip(expr(p.def.get())) : nullptr;
+                auto it = callArgTypes.find(p.decl);
+                bool escaped = escapedFns.count(f) > 0;
+                if (it != callArgTypes.end() && !escaped) t = t ? join(t, it->second) : it->second;
+                if (t && !isVague(t)) {
+                    p.decl->type = t;
+                } else if (strict) {
+                    SrcPos after{p.pos.line, p.pos.col + (int)p.name.size()};
+                    insertFix(p.pos, what + " of " + f->name + " needs a type in strict code (" +
+                                         (escaped ? f->name + " is used as a value, so not every call can be seen"
+                                                  : "no call in this file says what it is") + ")",
+                              (int)p.name.size(), after, ": any");
+                }
+            }
+            if (strict && f->exported && !f->ret && !f->isMethod && f->hasBody)
+                err(f->namePos, "the exported function " + f->name +
+                                    " needs a return type in strict code (ixo fmt --annotate writes it)",
+                    (int)f->name.size());
+        }
         Type* declared = f->ret ? fromTypeExpr(f->ret.get()) : nullptr;
         fns.push_back({f, declared, nullptr});
         if (!f->isLambda) narrowed.push_back({{nullptr, nullptr}});  // a barrier
@@ -2399,8 +2629,23 @@ struct Checker::Impl {
             }
         }
         if (ci)
-            for (auto& p : c->ctorParams)
-                if (!p.type) inferField(ci, ci->fieldIndex[p.name], tAny);
+            for (auto& p : c->ctorParams) {
+                if (p.type) continue;
+                if (!strict) {
+                    inferField(ci, ci->fieldIndex[p.name], tAny);
+                    continue;
+                }
+                // strict: a field's type is what its default and the constructions in this file give it
+                Type* t = p.def ? strip(expr(p.def.get())) : nullptr;
+                auto it = ctorArgTypes.find(&p);
+                if (it != ctorArgTypes.end()) t = t ? join(t, it->second) : it->second;
+                if (t && !isVague(t))
+                    inferField(ci, ci->fieldIndex[p.name], t);
+                else if (!ci->enumOf)
+                    err(p.pos, "field '" + p.name + "' of " + c->name + " needs a type in strict code (no " + c->name +
+                                   "(...) in this file says what it is)",
+                        (int)p.name.size());
+            }
         for (auto& m : c->methods) fnDecl(m.get());
         if (ci) checkInterfaceSignatures(c, ci);
     }
@@ -2455,13 +2700,47 @@ struct Checker::Impl {
             }
     }
 
+    // ixo fmt --annotate: the inferred types of unannotated parameters and results, as `: T`
+    static bool annotatable(Type* t) {
+        if (!t || isVague(t) || t->k == Type::Nil || t->k == Type::Fn || t->k == Type::Module || t->k == Type::Namespace)
+            return false;
+        return true;
+    }
+    void collectAnnotations(Block* program) {
+        mod.annotations.clear();
+        auto one = [&](FnDecl* f) {
+            if (f->isLambda || f->isGpu || f->isFork || f->isPar || f->name == "main" || !f->hasBody) return;
+            for (auto& p : f->params) {
+                if (p.type || !p.decl || p.name == "self" || !p.unpack.empty() || !p.nameEnd) continue;
+                Type* t = p.def ? strip(p.def->type) : nullptr;
+                auto it = callArgTypes.find(p.decl);
+                if (it != callArgTypes.end() && !escapedFns.count(f)) t = t ? join(t, strip(it->second)) : strip(it->second);
+                if (annotatable(t) && typeToString(t).find("any") == std::string::npos)
+                    mod.annotations.push_back({p.nameEnd, p.nameEnd, ": " + typeToString(t)});
+            }
+            if (!f->ret && f->sigEnd) {
+                auto r = fnRet.find(f);
+                if (r != fnRet.end() && annotatable(r->second) && typeToString(r->second).find("any") == std::string::npos)
+                    mod.annotations.push_back({f->sigEnd, f->sigEnd, ": " + typeToString(r->second)});
+            }
+        };
+        for (auto& s : program->stmts) {
+            if (s->kind == NK::FnDecl) one(static_cast<FnDecl*>(s.get()));
+            else if (s->kind == NK::ClassDecl)
+                for (auto& m : static_cast<ClassDecl*>(s.get())->methods) one(m.get());
+        }
+    }
+
+    Block* rootBlock = nullptr;
     void run(Block* program) {
+        rootBlock = program;
         // Two silent inference passes, then one that reports errors.
         for (int pass = 0; pass < 3; pass++) {
             report = pass == 2;
             block(program);
         }
         checkErrorKinds(program);
+        collectAnnotations(program);
     }
 };
 

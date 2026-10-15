@@ -29,7 +29,7 @@ foreach ($src in Get-ChildItem src/*.cpp) {
 
 if ($todo.Count -gt 0) {
     "compiling $($todo.Count) file(s) ($Mode)..."
-    $results = $todo | ForEach-Object -ThrottleLimit 12 -Parallel {
+    $results = $todo | ForEach-Object -ThrottleLimit ([int]($env:IXO_BUILD_JOBS ?? 12)) -Parallel {
         $obj = Join-Path $using:objDir ([IO.Path]::GetFileNameWithoutExtension($_) + ".o")
         $msg = & g++ @using:flags -c $_ -o $obj 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) { Remove-Item $obj -ErrorAction SilentlyContinue; "FAIL:$msg" } elseif ($msg.Trim()) { $msg }

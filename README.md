@@ -1,9 +1,15 @@
 # Ixo
 
 Ixo is a small, readable programming language: indentation instead of braces and colons,
-optional types that are checked before the program runs, errors as values, pattern matching,
-interfaces and enums, lightweight tasks that talk through flows (channels), and `par` for
-running work on every core.
+types that are inferred and checked before the program runs (strictly, in files that ask for
+it), errors as values, pattern matching, data records, interfaces and enums, lightweight
+tasks that talk through flows (channels), `par` for running work on every core, numeric
+arrays, and `gpu fn` kernels that run on the GPU (Vulkan, WebGPU) or on every core. Hot code
+becomes machine code on x86-64 and ARM64, and `ixo build` packs a program into one executable
+for Windows, Linux, macOS or a web page.
+
+This is version 1.0. On the 16 tasks of `bench/rosetta`, an Ixo program takes 0.85× the words
+of the Python one, 0.60× Rust's and 0.45× C++'s ([the numbers](docs/rosetta.md)).
 
 ```ixo
 class Point(x, y)
@@ -51,24 +57,29 @@ Or build it; you need a C++20 compiler (g++ 11+ or clang 14+):
 ixo examples/hello.ixo     # run a program
 ixo                        # interactive REPL
 ixo check file.ixo         # report syntax and type errors without running
+ixo check --unsafe file.ixo   # ... and list every place that reaches raw memory
 ixo fmt file.ixo           # format in place (ixo fmt --check to only report)
+ixo fmt --annotate file.ixo   # write the inferred types into the signatures
 ixo test                   # run @test functions under tests/
 ixo new app                # create a project (ixo.toml, main.ixo, lib/, tests/)
 ixo add <git-url>          # add a package (ixo install / update / remove)
 ixo build                  # pack the program into one executable
+ixo build --target linux-arm64   # ... for another machine (or --target wasm: a web page)
+ixo build --train          # ... that starts warm, with this run's JIT profile
 ixo --profile file.ixo     # run with the sampling profiler
 ixo lsp                    # language server, used by editors
 ixo dap                    # debug adapter, used by editors
 ```
 
 For Visual Studio Code, install the extension in `editors/vscode` (see its README). It gives
-highlighting, errors as you type, hover, go to definition, find references, rename,
-signature help, completion, formatting and a debugger.
+highlighting, errors as you type with quick fixes, hover, go to definition, find references,
+rename, signature help, completion, formatting, a test explorer and a debugger.
 
 ## Documentation
 
 - [Language guide](docs/language.md): everything the language does, with examples
 - [Standard library reference](docs/stdlib.md): generated with `ixo stdlib-docs`
+- [Rosetta](docs/rosetta.md): 16 tasks in Ixo, Python, C++ and Rust, measured
 - [Grammar](docs/grammar.md)
 - [Roadmap and design decisions](ROADMAP.md)
 - [examples/](examples/): small complete programs
@@ -76,7 +87,8 @@ signature help, completion, formatting and a debugger.
 ## How it works
 
 ```
-source ─ lexer ─ parser ─ resolver ─ type checker ─ compiler ─ bytecode VM
+source ─ lexer ─ parser ─ resolver ─ type checker ─ compiler ─ bytecode VM ─ JIT
+                                                                    └─ gpu fn ─ SPIR-V / WGSL / CPU
 ```
 
 | file | job |
@@ -87,7 +99,11 @@ source ─ lexer ─ parser ─ resolver ─ type checker ─ compiler ─ bytec
 | `src/checker.cpp` | gradual type checker (inference + annotations) |
 | `src/compiler.cpp` | AST to stack-machine bytecode |
 | `src/vm.cpp`, `src/values.cpp` | the VM: calls, methods, operators, fibers (tasks), flows, regions, mark-and-sweep GC |
-| `src/jit.cpp` | JIT for hot functions and loops (x86-64 and ARM64) |
+| `src/jit.cpp` | JIT for hot functions and loops (x86-64 and ARM64): a plain tier and a typed tier, compiled on a thread of their own |
+| `src/warm.cpp` | warm start: the JIT's profile kept between runs and packed by `ixo build --train` |
+| `src/simd.cpp`, `src/array.cpp` | SIMD list operations; numeric arrays, item by item on every core |
+| `src/gpu.cpp`, `src/spirv.cpp`, `src/vk.cpp` | `gpu fn` kernels: compiled to SPIR-V (run with Vulkan) and WGSL (WebGPU) |
+| `src/kcode.cpp`, `src/cuda.cpp` | kernels as machine code for the CPU fallback; PTX through the CUDA driver |
 | `src/par.cpp` | `par`: worker threads with their own heaps, value copying, shared flows, frozen values |
 | `src/lib_*.cpp`, `src/prelude.cpp` | standard library (C++ and Ixo): `lib_ext` has re, time, csv, os.exec and ffi; `lib_net` HTTP |
 | `src/tools.cpp`, `src/lineedit.cpp`, `src/lsp.cpp` | REPL and its line editor, formatter, test runner, language server |
@@ -117,12 +133,17 @@ python bench/langs/run.py --no-jit       # Ixo vs C++ (g++ -O2) vs Python: time 
 python3 bench/backend/run.py             # Ixo's JIT vs LLVM-compiled code (Linux/macOS, clang)
 python bench/probes/run.py               # runtime-efficiency probes (ROADMAP Phase 11)
 python bench/gpu/run.py                  # gpu fn on the GPU, on the CPU fallback, as plain Ixo and as C++
+python bench/rosetta/run.py              # 16 tasks in Ixo, Python, C++, Rust: words, time, memory, output
+python bench/rosetta/run.py --safety     # strict Ixo rejects each planted mistake
 python tests/tools/fuzz.py 500           # parser/checker/formatter robustness
 python tests/tools/fuzz_run.py 500       # VM robustness
 IXO_GC_STRESS=1 python tests/run.py      # collect garbage at every safe point
 IXO_JIT_DEOPT_STRESS=1 python tests/run.py  # every guess of the typed JIT tier fails
 IXO_JIT_TIER2=0 python tests/run.py      # the plain JIT tier only
+IXO_JIT_SYNC=1 python tests/run.py       # compile on the program's thread, not the compiler thread
+IXO_INLINE=0 python tests/run.py         # without inlining
 IXO_GPU=cpu python tests/run.py          # gpu fn kernels on the CPU fallback
+IXO_GPU=cpu IXO_GPU_JIT=0 python tests/run.py   # ... as register code, not machine code
 IXO_SIMD=none python tests/run.py        # list operations without SIMD
 ```
 

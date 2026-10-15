@@ -85,6 +85,43 @@ def main():
 
         code, out, err = run([IXO, "build"], tmp)
         check("no project, no file: usage", code != 0 and "usage" in err, err)
+
+        # other machines: the runtime is given (or looked for in the cache, then fetched)
+        if os.name == "nt":
+            host = "windows-x64"
+        else:
+            arch = "arm64" if os.uname().machine in ("arm64", "aarch64") else "x64"
+            host = ("macos" if sys.platform == "darwin" else "linux") + "-" + arch
+        write(os.path.join(tmp, "t", "hot.ixo"), "fn sq(x) = x * x\ns = 0\nfor i in 0..20000 -> s += sq(i % 7)\nprint(s)\n")
+        tdir = os.path.join(tmp, "t")
+        code, out, err = run([IXO, "build", "hot.ixo", "--target", host, "--runtime", IXO, "-o", "x"], tdir)
+        exe2 = os.path.join(tdir, "x" + (".exe" if host.startswith("windows") else ""))
+        code2, out2, err2 = run([exe2], tdir) if code == 0 else (1, "", "")
+        check("--target with --runtime", code == 0 and code2 == 0 and out2.strip() == "259987", out + err + out2 + err2)
+        env_home = os.environ.get("IXO_HOME")
+        os.environ["IXO_HOME"] = os.path.join(tmp, "home")
+        os.environ["IXO_RUNTIME_URL"] = "file:///nowhere/"
+        code, out, err = run([IXO, "build", "hot.ixo", "--target", "linux-arm64" if host != "linux-arm64" else "windows-x64"], tdir)
+        check("--target without a runtime says where to put one", code != 0 and "--runtime" in err and "runtimes" in err, err)
+        code, out, err = run([IXO, "build", "hot.ixo", "--target", "plan9"], tdir)
+        check("an unknown target lists the targets", code != 0 and "linux-arm64" in err, err)
+        fake = os.path.join(tmp, "wasmrt")
+        for f in ("ixo.js", "ixo.wasm", "coi-serviceworker.js"):
+            write(os.path.join(fake, f), "// " + f)
+        code, out, err = run([IXO, "build", "hot.ixo", "--target", "wasm", "--runtime", fake], tdir)
+        web = os.path.join(tdir, "hot-web")
+        check("--target wasm makes a page", code == 0 and all(os.path.exists(os.path.join(web, f))
+              for f in ("index.html", "run.js", "program.js", "ixo.wasm")) and
+              "fn sq(x)" in open(os.path.join(web, "program.js"), encoding="utf-8").read(), out + err)
+        if env_home is None:
+            del os.environ["IXO_HOME"]
+        else:
+            os.environ["IXO_HOME"] = env_home
+        del os.environ["IXO_RUNTIME_URL"]
+        code, out, err = run([IXO, "build", "hot.ixo", "--train", "-o", "warm"], tdir)
+        exe3 = os.path.join(tdir, "warm" + EXE)
+        code3, out3, err3 = run([exe3], tdir) if code == 0 else (1, "", "")
+        check("--train: built warm, same output", code == 0 and "starts warm" in out and out3.strip() == "259987", out + err + out3 + err3)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nall passed" if not failures else f"\n{len(failures)} failed")

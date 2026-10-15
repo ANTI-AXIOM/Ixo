@@ -2,7 +2,7 @@
   "name": "ixo-lang",
   "displayName": "Ixo",
   "description": "Ixo language support: syntax highlighting, errors as you type, hover, go to definition, find references, rename, signature help, completion, formatting and debugging.",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "publisher": "ixo-lang",
   "license": "MIT",
   "engines": {

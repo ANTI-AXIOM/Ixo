@@ -1,0 +1,3 @@
+# A map moved to all cores stops where the loop would: dividing an int by 0.
+xs = (0..300_000).list
+ys = xs.map(fn(v) = 10 // (v - 5))     # expect panic: division by zero

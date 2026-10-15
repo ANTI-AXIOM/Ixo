@@ -110,7 +110,10 @@ static void parseProfile(const std::string& text, WarmProfile& w) {
 }
 
 void VM::warmLoad(const std::string& mainPath) {
-    if (!jitOn || !warmEnabled()) return;
+    // an executable from `ixo build --train` starts warm whatever IXO_JIT_CACHE says
+    const Bundle* bundled = activeBundle();
+    bool trained = bundled && vfsIsFile(S(P(bundled->root) / ".ixo-warm"));
+    if (!jitOn || (!warmEnabled() && !trained)) return;
     auto w = std::make_shared<WarmProfile>();
     std::string text;
     if (const Bundle* b = activeBundle()) {

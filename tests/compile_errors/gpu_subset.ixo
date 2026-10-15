@@ -24,3 +24,5 @@ gpu fn wide(out: buffer[int])
 gpu fn maptype(m: map)                     # expect error: it takes int, float, bool, buffer[int] or buffer[float]
     m = 1
 counter = 0
+names = ["a"]
+print(gpu names.map(fn(s) = s.len))       # expect error: gpu map

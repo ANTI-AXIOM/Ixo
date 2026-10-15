@@ -1,0 +1,7 @@
+# fn main's parameters come from the command line: positional values, --name value, --flag.
+# args: --top 2 --upper apple kiwi apple pear
+fn main(words: list[str], top = 5, upper = false)
+    counts = words.map(if upper -> _.up else _).counts
+    for (w, k) in counts.pairs.sort_by(-_[1])[..top] -> print(w, k)
+# expect: APPLE 2
+# expect: KIWI 1

@@ -443,6 +443,15 @@ struct TypeInfo {
     bool useful = false;                   // anything typed at all
 };
 
+// The compiler thread compiles from copies: these point at them (null: the function's own)
+thread_local const std::vector<uint8_t>* tlsProfile = nullptr;
+thread_local const std::vector<InlineCache>* tlsIcs = nullptr;
+thread_local const std::vector<std::pair<uint32_t, int>>* tlsSeeds = nullptr;
+thread_local int tlsNoTier2 = -1;
+const std::vector<uint8_t>& profileOf(const ObjFunction* fn) { return tlsProfile ? *tlsProfile : fn->typeSeen; }
+const InlineCache& icOf(const ObjFunction* fn, size_t i) { return tlsIcs ? (*tlsIcs)[i] : fn->ic[i]; }
+const std::vector<std::pair<uint32_t, int>>& seedsOf(const ObjFunction* fn) { return tlsSeeds ? *tlsSeeds : fn->jitSeeds; }
+
 // The slots of locals that closures made in this function capture.
 void capturedLocals(ObjFunction* fn, const Analysis& an, std::vector<bool>& out) {
     const auto& code = fn->chunk.code;
@@ -469,7 +478,7 @@ void inferTypes(ObjFunction* fn, const Analysis& an, TypeInfo& ti, const std::ve
     ti.captured.assign((size_t)ti.slots, false);
     ti.blockStart.assign(n, false);
     capturedLocals(fn, an, ti.captured);
-    const auto& prof = fn->typeSeen;
+    const auto& prof = profileOf(fn);
     size_t codeSize = fn->chunk.code.size();
     auto seen = [&](size_t off) -> uint8_t { return off < prof.size() ? prof[off] : 0; };
     // where control flow joins: those instructions start with every value in its slot
@@ -1407,10 +1416,25 @@ bool writeExec(char* dst, const uint8_t* src, size_t n) {
     return true;
 }
 
+// freed pieces of code memory (code replaced and no longer running), reused first
+std::vector<std::pair<char*, size_t>> freeCode;  // under codeArenaLock
+
 void* allocExec(const std::vector<uint8_t>& code) {
     std::lock_guard<std::mutex> g(codeArenaLock);
     size_t n = (code.size() + 15) & ~(size_t)15;
-    char* dst;
+    char* dst = nullptr;
+    for (size_t i = 0; i < freeCode.size(); i++)
+        if (freeCode[i].second >= n) {
+            dst = freeCode[i].first;
+            if (freeCode[i].second - n >= 64) {
+                freeCode[i].first += n;
+                freeCode[i].second -= n;
+            } else {
+                freeCode.erase(freeCode.begin() + (std::ptrdiff_t)i);
+            }
+            if (!writeExec(dst, code.data(), code.size())) return nullptr;
+            return dst;
+        }
     if (n > kCodeChunk / 4) {  // a big function gets pages of its own
         size_t page = pageSize();
         dst = newExecChunk((n + page - 1) / page * page);
@@ -1437,6 +1461,15 @@ struct CodeRange {
 std::mutex codeRangesLock;
 std::vector<CodeRange> codeRanges;  // sorted by start
 std::atomic<uintptr_t> codeLo{UINTPTR_MAX}, codeHi{0};
+
+void unregisterCode(uintptr_t start) {
+    std::lock_guard<std::mutex> g(codeRangesLock);
+    for (auto it = codeRanges.begin(); it != codeRanges.end(); ++it)
+        if (it->start == start) {
+            codeRanges.erase(it);
+            return;
+        }
+}
 
 void registerCode(uintptr_t start, size_t size, ObjFunction* fn, const JitCode* code) {
     std::lock_guard<std::mutex> g(codeRangesLock);
@@ -2085,6 +2118,7 @@ struct Gen {
     static constexpr uint64_t kUnknown = UINT64_MAX, kAnyInstance = UINT64_MAX - 1;
     std::vector<uint64_t> instCls;
     std::vector<uint8_t> thawed;  // known not frozen (an object never changes that)
+    std::vector<uint8_t> listOk;  // known to hold a list (a value's type never changes either)
     int memSlot(int k) const { return loc[(size_t)k].mem >= 0 ? loc[(size_t)k].mem : k; }
     std::vector<Loc> loc;
     std::vector<uint8_t> ty, memTy;
@@ -2149,6 +2183,7 @@ struct Gen {
         loc[(size_t)k] = Loc{};
         instCls[(size_t)k] = kUnknown;
         thawed[(size_t)k] = 0;
+        listOk[(size_t)k] = 0;
     }
     // slot k's register goes (its value stays the same, in memory): copies sharing the register go to memory
     void dropReg(int k) {
@@ -2267,6 +2302,7 @@ struct Gen {
         for (int& o : owner) o = -1;
         for (auto& c : instCls) c = kUnknown;
         for (auto& t : thawed) t = 0;
+        for (auto& l : listOk) l = 0;
     }
     // every slot from k up is dead
     void killFrom(int k) {
@@ -2332,7 +2368,10 @@ struct Gen {
             return loc[(size_t)v].reg;
         }
         if (var && loc[(size_t)v].reg >= 0) dropReg(v);  // an old pointer: checked again
-        return var ? allocReg(false) : RAX;
+        if (!var) return RAX;
+        int r = allocReg(false);
+        owner[r] = v;  // (taken now: later allocations must not hand it out again)
+        return r;
     }
     // Checks (unless known) that slot k holds an instance of class cls (any class:
     // UINT64_MAX), loading its pointer into `obj`; remembers it for the variable.
@@ -2539,6 +2578,7 @@ struct Gen {
         Loc& l = loc[(size_t)k];
         instCls[(size_t)k] = kUnknown;
         thawed[(size_t)k] = 0;
+        listOk[(size_t)k] = 0;
         if (l.alias >= 0 || l.mem >= 0) {
             l = Loc{};
         } else {
@@ -2649,6 +2689,7 @@ struct Gen {
             }
             pinA = d - 2;
             pinB = d - 1;
+            int src = dblOf(d - 1, 1);  // first: the result's register must not be taken by it
             int dst;
             if (x == TY_FLOAT) {
                 dst = ownReg(d - 2);
@@ -2657,7 +2698,6 @@ struct Gen {
                 dst = allocReg(true);
                 a.cvtsi2sdRR(dst - 16, ri);
             }
-            int src = dblOf(d - 1, 1);
             uint8_t sop = op == OP_ADD ? 0x58 : op == OP_SUB ? 0x5C : op == OP_MUL ? 0x59 : 0x5E;
             a.sdRR(sop, dst - 16, src);
             if (x != TY_FLOAT) unmap(d - 2);
@@ -2751,6 +2791,7 @@ struct Gen {
                         if (from == d - 1) writeBack(d - 1);
                         uint64_t cls = from != d - 1 ? instCls[(size_t)from] : kUnknown;
                         uint8_t th = from != d - 1 ? thawed[(size_t)from] : 0;
+                        uint8_t lk = from != d - 1 ? listOk[(size_t)from] : 0;
                         unmap(k);
                         copySlot(from, k);
                         memTy[(size_t)k] = memTy[(size_t)from];
@@ -2759,6 +2800,7 @@ struct Gen {
                         if (!cap) {
                             instCls[(size_t)k] = cls;
                             thawed[(size_t)k] = th;
+                            listOk[(size_t)k] = lk;
                         }
                     }
                 }
@@ -2990,10 +3032,10 @@ struct Gen {
                     a.sdRR(0x58, r - 16, src);
                     define(k, r, TY_FLOAT);
                 } else {  // an int plus a float: a float now
+                    int src = dblOf(d - 1, 1);
                     int ri = regOf(k);
                     int xr = allocReg(true);
                     a.cvtsi2sdRR(xr - 16, ri);
-                    int src = dblOf(d - 1, 1);
                     a.sdRR(0x58, xr - 16, src);
                     unmap(k);
                     assignReg(k, xr, TY_FLOAT);
@@ -3229,7 +3271,7 @@ struct Gen {
                 if (in.op == OP_GET_FIELD) {
                     fo = L.instFields + (int32_t)(16 * in.a);
                 } else {
-                    InlineCache& ic = fn->ic[in.b];
+                    const InlineCache& ic = icOf(fn, in.b);
                     if (ic.clsId == UINT64_MAX || ic.index < 0) return false;
                     cls = ic.clsId;
                     fo = L.instFields + 16 * ic.index;
@@ -3267,7 +3309,7 @@ struct Gen {
                 if (in.op == OP_SET_FIELD) {
                     fo = L.instFields + (int32_t)(16 * in.a);
                 } else {
-                    InlineCache& ic = fn->ic[in.b];
+                    const InlineCache& ic = icOf(fn, in.b);
                     if (ic.clsId == UINT64_MAX || ic.index < 0) return false;
                     cls = ic.clsId;
                     fo = L.instFields + 16 * ic.index;
@@ -3303,7 +3345,7 @@ struct Gen {
             }
             case OP_GET_INDEX: case OP_SET_INDEX: {
                 bool get = in.op == OP_GET_INDEX;
-                if (in.next < fn->typeSeen.size() && (fn->typeSeen[in.next] & PB_NOTLIST)) return false;  // maps...
+                if (in.next < profileOf(fn).size() && (profileOf(fn)[in.next] & PB_NOTLIST)) return false;  // maps...
                 int k = get ? d - 2 : d - 3;
                 uint8_t t = get ? (i + 1 < an.ins.size() ? ti->at[i + 1][(size_t)k] : TY_ANY) : y;
                 if (T(k + 1) != TY_INT || tyUnboxed(T(k)) || T(k) == TY_NIL) return false;
@@ -3313,11 +3355,16 @@ struct Gen {
                     int ri = regOf(k + 1);
                     int lst = memSlot(k);
                     int ex = exitAt(i);
-                    a.cmpByte(RBX, slot(lst) + kValTag, TAG_OBJ);
-                    a.jcc(CC_NE, ex);
-                    a.load(RAX, RBX, slot(lst) + kValPayload);
-                    a.cmpByte(RAX, L.objType, (uint8_t)OT::List);
-                    a.jcc(CC_NE, ex);
+                    if (lst != k && listOk[(size_t)lst]) {  // known to be a list: just its pointer
+                        a.load(RAX, RBX, slot(lst) + kValPayload);
+                    } else {
+                        a.cmpByte(RBX, slot(lst) + kValTag, TAG_OBJ);
+                        a.jcc(CC_NE, ex);
+                        a.load(RAX, RBX, slot(lst) + kValPayload);
+                        a.cmpByte(RAX, L.objType, (uint8_t)OT::List);
+                        a.jcc(CC_NE, ex);
+                        if (lst != k) listOk[(size_t)lst] = 1;
+                    }
                     a.cmpByte(RAX, L.objKind, LK_VALUES);
                     a.jcc(CC_NE, ex);
                     a.movR(RCX, ri);
@@ -3339,14 +3386,21 @@ struct Gen {
                 int rv = get ? allocReg(t == TY_FLOAT) : regOf(d - 1);
                 int ex = exitAt(i);
                 int lst = memSlot(k);
-                a.cmpByte(RBX, slot(lst) + kValTag, TAG_OBJ);
-                a.jcc(CC_NE, ex);
-                a.load(RAX, RBX, slot(lst) + kValPayload);
-                a.cmpByte(RAX, L.objType, (uint8_t)OT::List);
-                a.jcc(CC_NE, ex);
-                if (!get) {
+                bool var = lst != k;
+                if (var && listOk[(size_t)lst]) {  // known to be a list: just its pointer
+                    a.load(RAX, RBX, slot(lst) + kValPayload);
+                } else {
+                    a.cmpByte(RBX, slot(lst) + kValTag, TAG_OBJ);
+                    a.jcc(CC_NE, ex);
+                    a.load(RAX, RBX, slot(lst) + kValPayload);
+                    a.cmpByte(RAX, L.objType, (uint8_t)OT::List);
+                    a.jcc(CC_NE, ex);
+                    if (var) listOk[(size_t)lst] = 1;
+                }
+                if (!get && !(var && thawed[(size_t)lst])) {
                     a.cmpByte(RAX, L.objFrozen, 0);
                     a.jcc(CC_NE, ex);
+                    if (var) thawed[(size_t)lst] = 1;
                 }
                 int values = a.newLabel(), done = a.newLabel();
                 a.movzxByte(R9, RAX, L.objKind);
@@ -3423,9 +3477,10 @@ struct Gen {
             loc.assign((size_t)ti->slots, Loc{});
             instCls.assign((size_t)ti->slots, kUnknown);
             thawed.assign((size_t)ti->slots, 0);
+            listOk.assign((size_t)ti->slots, 0);
             // loops whose values were never seen (compiled before the interpreter got there)
             unprofiledLoop.assign(an.ins.size(), -1);
-            if (!fn->typeSeen.empty()) {
+            if (!profileOf(fn).empty()) {
                 int count = 0;
                 for (size_t b = 0; b < an.ins.size(); b++) {
                     const Ins& lp = an.ins[b];
@@ -3433,14 +3488,14 @@ struct Gen {
                     size_t h = an.at[(size_t)lp.target];
                     if (unprofiledLoop[h] >= 0) continue;
                     bool seed = false;
-                    for (auto& sd : fn->jitSeeds) seed |= sd.first == (uint32_t)lp.target;
+                    for (auto& sd : seedsOf(fn)) seed |= sd.first == (uint32_t)lp.target;
                     bool blind = false;
                     for (size_t j = h; j <= b && !seed && !blind; j++) {
                         const Ins& p = an.ins[j];
                         bool producer = p.op == OP_GET_FIELD || p.op == OP_GET_MEMBER || p.op == OP_GET_MEMBER_RAW ||
                                         p.op == OP_GET_INDEX || p.op == OP_CALL || p.op == OP_INVOKE ||
                                         p.op == OP_GET_GLOBAL || p.op == OP_FOR_SEQ;
-                        if (producer && p.depth >= 0 && p.next < fn->typeSeen.size() && fn->typeSeen[p.next] == 0)
+                        if (producer && p.depth >= 0 && p.next < profileOf(fn).size() && profileOf(fn)[p.next] == 0)
                             blind = true;
                     }
                     if (blind) unprofiledLoop[h] = count++;
@@ -4558,6 +4613,8 @@ struct Gen {
         }
         (void)cnt;
         out.fn = reinterpret_cast<JitFn>(mem);
+        out.mem = mem;
+        out.bytes = a.b.size();
         out.maxDepth = an.maxDepth + 1;
         out.loopHeaders = an.loopHeaders;
         registerCode((uintptr_t)mem, a.b.size(), fn, &out);
@@ -4631,7 +4688,7 @@ bool jitCompile(ObjFunction* fn, ObjClosure* self, JitCode& out, std::string* wh
         const char* e = std::getenv("IXO_JIT_TIER2");
         return !(e && e[0] == '0');
     }();
-    if (tier2On && !fn->noTier2) {
+    if (tier2On && !(tlsNoTier2 >= 0 ? tlsNoTier2 != 0 : fn->noTier2)) {
         TypeInfo ti;
         inferTypes(fn, an, ti, seeds);
         if (ti.useful) {
@@ -4673,6 +4730,42 @@ bool jitCompile(ObjFunction* fn, ObjClosure* self, JitCode& out, std::string* wh
     if (why) *why = "the JIT only supports x86-64";
     return false;
 #endif
+}
+
+bool jitCompileFrom(ObjFunction* fn, ObjClosure* self, JitCode& out, std::string* why,
+                    const std::vector<std::pair<uint32_t, int>>& seeds, VM* vm, const std::vector<uint8_t>* profile,
+                    const std::vector<InlineCache>* ics, bool noTier2) {
+    tlsProfile = profile;
+    tlsIcs = ics;
+    tlsSeeds = &seeds;
+    tlsNoTier2 = noTier2 ? 1 : 0;
+    bool ok = jitCompile(fn, self, out, why, seeds, vm);
+    tlsProfile = nullptr;
+    tlsIcs = nullptr;
+    tlsSeeds = nullptr;
+    tlsNoTier2 = -1;
+    return ok;
+}
+
+void* jitAllocExec(const std::vector<uint8_t>& code) {
+#ifdef IXO_JIT_ANY
+    return allocExec(code);
+#else
+    (void)code;
+    return nullptr;
+#endif
+}
+
+void jitFreeCode(JitCode* code) {
+    if (!code) return;
+#ifdef IXO_JIT_ANY
+    if (code->mem) {
+        unregisterCode((uintptr_t)code->mem);
+        std::lock_guard<std::mutex> g(codeArenaLock);
+        freeCode.push_back({static_cast<char*>(code->mem), (code->bytes + 15) & ~(size_t)15});
+    }
+#endif
+    delete code;
 }
 
 }  // namespace ixo

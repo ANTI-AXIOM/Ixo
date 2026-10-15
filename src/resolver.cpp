@@ -403,7 +403,9 @@ void Resolver::resolveStmt(Stmt* s) {
         case NK::Destructure: {
             auto* d = static_cast<Destructure*>(s);
             resolveExpr(d->value.get());
-            for (auto& t : d->targets) resolveTarget(t.get(), true);
+            for (auto& t : d->targets)
+                if (!(t->kind == NK::Ident && static_cast<Ident*>(t.get())->name == "_"))  // _ drops that value
+                    resolveTarget(t.get(), true);
             break;
         }
         case NK::VarDecl: {
@@ -848,6 +850,11 @@ void Resolver::resolvePattern(Pattern* p) {
             break;
         case Pattern::TypeP_: break;
         case Pattern::ClassP:
+            shortVariant(p);
+            if (p->k == Pattern::Value) {
+                resolveExpr(p->value.get());
+                break;
+            }
             resolveExpr(p->value.get());
             for (auto& s : p->subs) resolvePattern(s.get());
             break;
@@ -875,6 +882,35 @@ void Resolver::resolvePattern(Pattern* p) {
             p->decl = declareLocal(p->name, DeclKind::Var, p->pos, true);
             break;
     }
+}
+
+// Circle(r) for Shape.Circle(r): a variant written alone, when no class or other name
+// is called that and only one enum has such a variant.
+void Resolver::shortVariant(Pattern* p) {
+    if (!p->value || p->value->kind != NK::Ident) return;
+    std::string n = static_cast<Ident*>(p->value.get())->name;
+    if (lookupLocalScopes(n) || mod.globals.count(n)) return;
+    std::string enumName;
+    const EnumVariant* variant = nullptr;
+    int found = 0;
+    for (auto& [gname, d] : mod.globals) {
+        Decl* src = d;
+        if (d->kind == DeclKind::Import && d->importFrom && !d->importFrom->isNative) {
+            auto it = d->importFrom->globals.find(d->importName);
+            src = it == d->importFrom->globals.end() ? nullptr : it->second;
+        }
+        if (!src || src->kind != DeclKind::Enum || !src->node || src->node->kind != NK::EnumDecl) continue;
+        for (auto& v : static_cast<EnumDecl*>(src->node)->variants)
+            if (v.name == n) {
+                found++;
+                enumName = gname;
+                variant = &v;
+            }
+    }
+    if (found != 1) return;  // (none: an unknown name is reported; several: write Shape.Circle)
+    p->name = enumName + "." + n;
+    p->value = std::make_unique<Member>(p->pos, std::make_unique<Ident>(p->pos, enumName), n, p->pos);
+    if (variant->unit && !p->inclusive) p->k = Pattern::Value;  // Empty: that one value
 }
 
 void Resolver::resolveExpr(Expr* e) {

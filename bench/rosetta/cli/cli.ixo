@@ -1,0 +1,6 @@
+# A command-line tool: count the words given as arguments and print the most common.
+fn main(words: list[str], top = 5, upper = false)
+    "Counts words and prints the most common ones."
+    counts = words.map(if upper -> _.up else _).counts
+    width = counts.keys.map(_.len).max
+    for (w, n) in counts.pairs.sort_by(-_[1])[..top] -> print(w.pad(width), str(n).pad(-3), "#" * n)

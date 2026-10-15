@@ -1,0 +1,13 @@
+# Shortest distances from node 0 in a weighted graph (Dijkstra with a binary heap).
+n = 20_000
+edges = (0..n).map(fn(u) = [((u * 3 + 1) % n, u % 17 + 1), ((u + 7) % n, 5), ((u * u + 11) % n, u % 23 + 2)])
+dist = {0: 0}
+heap = [(0, 0)]
+while heap.len > 0
+    d, u = heap.heap_pop
+    if d > dist[u] -> continue
+    for (v, w) in edges[u]
+        if v not in dist or d + w < dist[v]
+            dist[v] = d + w
+            heap.heap_push((d + w, v))
+print(dist[n - 1], dist.len, dist.values.sum)

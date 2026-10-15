@@ -8,7 +8,7 @@ namespace ixo {
 
 extern const char* const kPreludeSource;
 const char* const kPreludeSource = R"IXO(
-fn iter__each(self: iter, f: fn(any))
+fn iter__each(self: iter, f: fn(any)): any
     "Calls f with every item; returns the collection."
     for x in self
         f(x)
@@ -35,7 +35,7 @@ fn iter__skip(self: iter, f: fn(any) -> bool): list
         if not f(x) -> out.add(x)
     out
 
-fn iter__fold(self: iter, start, f: fn(any, any) -> any)
+fn iter__fold(self: iter, start, f: fn(any, any) -> any): any
     "Combines the items: fold(0, _a + _b) sums them."
     acc = start
     for x in self
@@ -65,13 +65,13 @@ fn iter__count(self: iter, f): int
             n += 1
     n
 
-fn iter__find_by(self: iter, f: fn(any) -> bool)
+fn iter__find_by(self: iter, f: fn(any) -> bool): any
     "The first item for which f is true, or nil."
     for x in self
         if f(x) -> return x
     nil
 
-fn iter__min_by(self: iter, f: fn(any) -> any)
+fn iter__min_by(self: iter, f: fn(any) -> any): any
     "The item with the smallest f(item)."
     best = nil
     best_key = nil
@@ -82,7 +82,7 @@ fn iter__min_by(self: iter, f: fn(any) -> any)
             best_key = k
     best
 
-fn iter__max_by(self: iter, f: fn(any) -> any)
+fn iter__max_by(self: iter, f: fn(any) -> any): any
     "The item with the largest f(item)."
     best = nil
     best_key = nil
@@ -111,7 +111,7 @@ fn iter__group_by(self: iter, f: fn(any) -> any): map
             groups[k] = [x]
     groups
 
-fn iter__partition(self: iter, f: fn(any) -> bool)
+fn iter__partition(self: iter, f: fn(any) -> bool): any
     "A tuple (matching, not_matching)."
     yes = []
     no = []
@@ -130,7 +130,7 @@ fn iter__flat_map(self: iter, f: fn(any) -> any): list
             out.add(y)
     out
 
-fn map__each(self: map, f: fn(any, any))
+fn map__each(self: map, f: fn(any, any)): any
     "Calls f(key, value) for every entry; returns the map."
     for k, v in self
         f(k, v)
@@ -170,6 +170,24 @@ class Cache
     fn is_empty* = self.data.is_empty
     fn clear* = self.data.wipe
     fn reset* = self.data.wipe
+
+class File(handle, path, mode)
+    "An open file from fs.open. Bind it with use (use f = fs.open(path)) and it's closed when the block ends."
+    fn read_line* = fs.file_op(self.handle, 0)
+    fn read* = fs.file_op(self.handle, 1)
+    fn write*(text) = fs.file_op(self.handle, 2, str(text))
+    fn close* = fs.file_op(self.handle, 3)
+    fn lines*
+        out = []
+        while true
+            line = fs.file_op(self.handle, 0)
+            if line == nil -> break
+            out.add(line)
+        out
+
+class PtxKernel(handle, name)
+    "A kernel for NVIDIA GPUs from gpu.ptx: k.launch(n, [args...]) runs n threads."
+    fn launch*(n, args) = gpu.ptx_launch(self.handle, n, args)
 
 class Request(method, path, query, headers, body, id)
     "An HTTP request from net.listen. Answer it with respond."

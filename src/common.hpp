@@ -16,6 +16,8 @@
 namespace ixo {
 
 // Ends the process now, without waiting for par worker threads.
+inline constexpr const char* kIxoVersion = "1.0.0";
+
 [[noreturn]] inline void hardExit(int code) {
     std::fflush(stdout);
     std::fflush(stderr);

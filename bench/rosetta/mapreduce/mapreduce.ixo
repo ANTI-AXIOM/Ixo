@@ -1,0 +1,11 @@
+# Counting primes below 300,000 on every core: split, map in parallel, reduce.
+fn count_primes(lo, hi)
+    n = 0
+    for x in max(lo, 2)..hi
+        d = 2
+        while d * d <= x and x % d != 0 -> d += 1
+        if d * d > x -> n += 1
+    n
+
+step = 300_000 // 8
+print((0..8).map(par count_primes(_ * step, (_ + 1) * step)).map(_.await).sum)

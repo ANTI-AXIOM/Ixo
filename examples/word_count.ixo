@@ -11,7 +11,7 @@ counts = {}
 for word in text.down.cut
     w = word.trim
     if w.len < 3 or not w[0].is_alpha -> continue
-    counts[w] = counts.get(w, 0) + 1
+    counts[w] += 1
 
 top = counts.pairs.sort(_a[1] > _b[1]).slice(0, 5)
 print(f"{counts.len} different words; the most common:")

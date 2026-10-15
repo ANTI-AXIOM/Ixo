@@ -1,0 +1,40 @@
+# Compiler optimizations keep results: small functions in place, callbacks by name,
+# tuples never made, constant loops made once, sums in one call, maps on all cores.
+fn sq(x) = x * x
+fn add3(a, b, c) = a + b + c
+fn add2(a, b) = a + b
+fn fact(n) = if n <= 1 -> 1 else n * fact(n - 1)
+k = 10
+fn addk(x) = x + k
+fn shadows()
+    k = 1
+    addk(5) + k
+print(sq(7), add3(1, 2, 3), fact(10), [1, 2, 3].map(sq), [1, 2, 3].fold(0, add2), shadows())
+# expect: 49 6 3628800 [1, 4, 9] 6 16
+
+a, b = 1, 2
+a, b = b, a
+print(a, b)                                        # expect: 2 1
+
+total = 0
+for i in 0..3
+    for (dx, dy) in [(1, 0), (0, 1), (-1, -1)] -> total += i * dx + dy
+for row in [[1], [2]] -> row.add(9)
+print(total)                                       # expect: 0
+
+s = 0
+for x in (0..1000).list -> s += x
+f = 0.5
+for y in [0.1, 0.2, 0.3] -> f += y
+t = 0
+for i in 0..=100 by 5 -> t += i
+print(s, f, t)                                     # expect: 499500 1.1 1050
+
+xs = (0..300_000).map(_ * 0.5)
+ys = xs.map(fn(v) = v * v + 1.0)
+zs = (0..300_000).list.map(fn(v) = v // 3 + v % 5)
+flags = (0..300_000).list.map(_ % 3 == 0)
+c = 2
+scaled = (0..300_000).list.map(_ * c)
+print(ys.len, ys[2], ys[299_999], zs[10], zs.sum, flags.count(true), scaled[7], type(scaled[7]))
+# expect: 300000 2.0 22499850001.25 3 15000450000 100000 14 int

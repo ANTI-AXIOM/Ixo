@@ -1,0 +1,7 @@
+$strict
+# Planted mistake: a missing nil check.
+fn find(names: list[str], target: str): int?
+    for i, name in names
+        if name == target -> return i
+    nil
+print(find(["a", "b"], "c") + 1)

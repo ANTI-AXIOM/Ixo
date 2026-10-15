@@ -240,7 +240,6 @@ struct ObjList : Obj {
         kind = LK_VALUES;
     }
 
-private:
     // an empty list takes kind k
     void become(ListKind k) {
         destroyStore();
@@ -507,6 +506,8 @@ struct ObjFunction : Obj {
     // JIT (code after an instruction it doesn't compile is reached from these).
     std::vector<std::pair<uint32_t, int>> jitSeeds;
     uint8_t jitRecompiles = 0;
+    bool jitQueued = false;  // being compiled on the compiler thread
+    bool promoted = false;   // compiled again with types after running untyped a while
     bool wantJit = false;          // $jit (or warm start): compile on the first call
     bool warmChecked = false;      // looked up in the warm-start profile
     bool noJit = false;            // $nojit: always interpreted
@@ -576,6 +577,7 @@ struct ObjClass : Obj {
     ObjClosure* ctor = nullptr;
     ModuleRt* module = nullptr;
     int ctorArity = 0, ctorMinArity = 0;
+    bool isData = false;  // data Point(x, y): immutable, compared and hashed by its fields
     uint64_t id;  // unique per class creation; identifies the class across heaps
     static std::atomic<uint64_t> nextId;
     ObjClass() : Obj(OT::Class), id(nextId.fetch_add(1)) {}
@@ -669,7 +671,7 @@ struct SeqView {
 
 inline bool seqOf(Value v, SeqView& out);  // below, once ObjList is complete
 
-struct ObjInstance : Obj {
+struct alignas(8) ObjInstance : Obj {  // (8: 24 bytes on 32-bit machines too, where the fields begin)
     InstFields fields;  // the n values follow the instance (VM::newInstance makes room)
     ObjClass* cls;
     ObjInstance(ObjClass* c, size_t n) : Obj(OT::Instance), cls(c) {
@@ -892,6 +894,10 @@ inline void destroyObj(Obj* o) {
 }
 
 // The items of a list or a tuple, read-only; false for any other value.
+// A numeric array (xs.array): a packed list whose arithmetic goes item by item (array.cpp).
+// Lists use the `appendable` byte (a string flag) to mark it.
+inline bool isArray(const Value& v) { return v.t == VT::Obj && v.o->type == OT::List && v.o->appendable == 1; }
+
 inline bool seqOf(Value v, SeqView& out) {
     if (v.t != VT::Obj) return false;
     if (v.o->type == OT::List) {

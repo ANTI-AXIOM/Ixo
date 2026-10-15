@@ -1,0 +1,50 @@
+# Groups of 64 threads share arrays and wait for each other; 2D launches; vec and mat in kernels.
+gpu fn block_sums(xs: buffer[float], sums: buffer[float])
+    tile = gpu.shared_floats(64)
+    i = gpu.index
+    t = gpu.local
+    v = 0.0
+    if i < xs.len -> v = xs[i]
+    tile[t] = v
+    gpu.barrier()
+    step = 32
+    while step > 0
+        if t < step -> tile[t] = tile[t] + tile[t + step]
+        gpu.barrier()
+        step = step // 2
+    if t == 0 -> sums[gpu.group] = tile[0]
+
+xs = gpu.floats((1..=200).map(_.float))
+sums = gpu.floats(4)
+block_sums(xs, sums)
+print(sums.list)                                   # expect: [2080.0, 6176.0, 10272.0, 1572.0]
+
+gpu fn grid(out: buffer[int], w: int)
+    out[gpu.y * w + gpu.x] = gpu.x * 10 + gpu.y
+o = gpu.ints(6)
+gpu.launch((3, 2), grid, o, 3)
+print(o.list)                                      # expect: [0, 10, 20, 1, 11, 21]
+
+gpu fn lengths(xs: buffer[float], out: buffer[float], shift: vec3)
+    i = gpu.index
+    v = vec(xs[i], 2.0, 2.0) + shift
+    v.y = v.y * 1.0
+    out[i] = v.len + v.dot(vec(1.0, 0.0, 0.0))
+out = gpu.floats(2)
+lengths(gpu.floats([0.0, 1.0]), out, vec(0.0, 0.0, 1.0))
+print(out.list.map(_.round(3)))                    # expect: [3.606, 4.742]
+
+gpu fn moved(m: mat, xs: buffer[float], out: buffer[float])
+    i = gpu.index
+    p = m * vec(xs[i], 1.0, 0.0, 1.0)
+    out[i] = p.x + p.y * 100.0 + p.z * 10000.0 + m[0, 3]
+res = gpu.floats(2)
+moved(mat.translate(vec(1.0, 2.0, 3.0)), gpu.floats([0.0, 5.0]), res)
+print(res.list)                                    # expect: [30302.0, 30307.0]
+
+unsafe gpu fn doubled(xs: buffer[int])
+    i = gpu.index
+    xs[i] = xs[i] * 2
+ints = gpu.ints([1, 2, 3])
+doubled(ints)
+print(ints.list, ints.address > 0)                 # expect: [2, 4, 6] true

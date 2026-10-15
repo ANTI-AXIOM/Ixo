@@ -29,7 +29,7 @@
 
 using namespace ixo;
 
-static const char* kVersion = "0.6.0";
+static const char* kVersion = kIxoVersion;
 
 static void usage() {
     std::printf(
@@ -113,6 +113,7 @@ static int cmdRun(const std::string& path, const std::vector<std::string>& args,
     Value argList = prog.vm.builtins[prog.vm.builtinIndex("args")].value;
     for (auto& a : args) as<ObjList>(argList)->push(prog.vm.vstr(a));
     Diagnostics diags;
+    prog.vm.noInline = ro.profile || ro.memprofile || std::getenv("IXO_OPSTATS");  // profiles show every function
     ModuleUnit* m = prog.loadFile(path, diags, prog.opts);
     if (!m) {
         std::fprintf(stderr, "ixo: can't read '%s'\n", path.c_str());
@@ -194,8 +195,12 @@ static int cmdRun(const std::string& path, const std::vector<std::string>& args,
     return ok ? prog.vm.exitCode : 1;
 }
 
-static int cmdCheck(const std::vector<std::string>& files) {
+static int cmdCheck(std::vector<std::string> files) {
     int errors = 0, warnings = 0;
+    // --unsafe: lists the unsafe blocks and the ffi calls (raw memory)
+    auto u = std::find(files.begin(), files.end(), "--unsafe");
+    bool listUnsafe = u != files.end();
+    if (listUnsafe) files.erase(u);
     for (auto& f : files) {
         Program prog;
         prog.opts.compile = false;
@@ -208,6 +213,20 @@ static int cmdCheck(const std::vector<std::string>& files) {
         }
         prog.printDiagnostics(diags);
         for (auto& d : diags.list) (d.severity == Diagnostic::Error ? errors : warnings)++;
+        if (listUnsafe && m->ast) {
+            std::function<void(Node*)> walk = [&](Node* n) {
+                if (!n) return;
+                if (n->kind == NK::Block && static_cast<Block*>(n)->unsafe)
+                    std::printf("%s:%d: unsafe block\n", f.c_str(), n->pos.line);
+                if (n->kind == NK::Member) {
+                    auto* mm = static_cast<Member*>(n);
+                    if (mm->object->kind == NK::Ident && static_cast<Ident*>(mm->object.get())->name == "ffi")
+                        std::printf("%s:%d: ffi.%s\n", f.c_str(), mm->namePos.line, mm->name.c_str());
+                }
+                forEachChild(n, walk);
+            };
+            walk(m->ast.get());
+        }
     }
     if (errors == 0) std::fprintf(stderr, "ok: no errors%s\n", warnings ? (" (" + std::to_string(warnings) + " warnings)").c_str() : "");
     return errors ? 1 : 0;
@@ -222,7 +241,7 @@ static int cmdStdlibDocs() {
     out += "## Global functions\n\n| name | signature | description |\n|---|---|---|\n";
     std::vector<std::string> nss;
     for (auto& b : vm.builtins) {
-        if (b.name.empty() || b.name[0] == '$') continue;
+        if (b.name.empty() || b.name[0] == '$' || b.name.rfind("__", 0) == 0) continue;  // compiler helpers
         if (isObjType(b.value, OT::Namespace)) {
             nss.push_back(b.name);
             continue;
@@ -243,6 +262,7 @@ static int cmdStdlibDocs() {
             auto it = vm.memberDocs.find(ns + "." + n);
             std::string sig = it != vm.memberDocs.end() ? it->second.first : "";
             std::string doc = it != vm.memberDocs.end() ? it->second.second : "";
+            if (doc.rfind("Used by ", 0) == 0) continue;  // helpers of a prelude class
             out += "| `" + ns + "." + n + "` | `" + sig + "` | " + doc + " |\n";
         }
     }
@@ -257,7 +277,8 @@ static int cmdStdlibDocs() {
     for (auto& [tag, name] : tags) {
         auto& table = vm.methods[(int)tag];
         std::vector<std::string> names;
-        for (auto& [s, mi] : table) names.push_back(vm.symName(s));
+        for (auto& [s, mi] : table)
+            if (vm.symName(s)[0] != '$') names.push_back(vm.symName(s));  // ($update: what m[k] += v compiles to)
         std::sort(names.begin(), names.end());
         out += std::string("\n### ") + name + "\n\n| method | signature | description |\n|---|---|---|\n";
         for (auto& n : names) {

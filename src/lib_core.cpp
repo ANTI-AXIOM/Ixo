@@ -55,6 +55,7 @@ void registerAllBuiltins(VM& vm) {
     registerExt(vm);
     registerNet(vm);
     registerGpu(vm);
+    registerArrays(vm);
 }
 
 // ------------------------------------------------------------------ globals
@@ -259,6 +260,170 @@ NATIVE(n_assert_eq) {
         vm.panic(msg);
     }
     return Value();
+}
+
+// fn main(input: str, top: int = 10, upper: bool = false): the command line parsed
+// from main's parameters. spec is [doc, name, kind, has default, name, kind, ...];
+// gives the value of parameter i (undef: its default).
+NATIVE(n_main_args) {
+    auto* spec = as<ObjList>(a[0]);
+    size_t want = (size_t)a[1].i;
+    struct P {
+        std::string name, kind;
+        bool hasDef;
+    };
+    std::vector<P> ps;
+    for (size_t i = 1; i + 2 < spec->len(); i += 3)
+        ps.push_back({vm.toStr(spec->get(i)), vm.toStr(spec->get(i + 1)), spec->get(i + 2).isBool() && spec->get(i + 2).b});
+    std::string doc = vm.toStr(spec->get(0));
+    std::vector<std::string> args;
+    int ai = vm.builtinIndex("args");
+    if (ai >= 0 && isObjType(vm.builtins[ai].value, OT::List)) {
+        auto* l = as<ObjList>(vm.builtins[ai].value);
+        for (size_t i = 0; i < l->len(); i++) args.push_back(vm.toStr(l->get(i)));
+    }
+    std::string prog = "program";
+    int osi = vm.builtinIndex("os");
+    if (osi >= 0 && isObjType(vm.builtins[osi].value, OT::Namespace)) {
+        auto& mem = as<ObjNamespace>(vm.builtins[osi].value)->members;
+        auto sc = mem.find("script");
+        if (sc != mem.end() && isObjType(sc->second, OT::String)) {
+            prog = as<ObjString>(sc->second)->s;
+            size_t sl = prog.find_last_of("/\\");
+            if (sl != std::string::npos) prog = prog.substr(sl + 1);
+        }
+    }
+    auto dashed = [](std::string s) {
+        for (auto& c : s)
+            if (c == '_') c = '-';
+        return s;
+    };
+    auto isList = [](const P& p) { return p.kind.rfind("list", 0) == 0; };
+    auto elemKind = [&](const P& p) {
+        if (!isList(p)) return p.kind;
+        size_t lb = p.kind.find('['), rb = p.kind.rfind(']');
+        return lb == std::string::npos ? std::string("str") : p.kind.substr(lb + 1, rb - lb - 1);
+    };
+    std::string usage = "usage: " + prog;
+    for (auto& p : ps) {
+        std::string up = p.name;
+        for (auto& c : up) c = (char)std::toupper((unsigned char)c);
+        if (p.kind == "bool")
+            usage += " [--" + dashed(p.name) + "]";
+        else if (isList(p))
+            usage += p.hasDef ? " [" + p.name + "...]" : " " + p.name + "...";
+        else if (p.hasDef)
+            usage += " [--" + dashed(p.name) + " " + up + "]";
+        else
+            usage += " " + p.name;
+    }
+    auto fail = [&](const std::string& msg) {
+        flushOut();
+        std::fprintf(stderr, "error: %s\n%s\n", msg.c_str(), usage.c_str());
+        std::fflush(stderr);
+        hardExit(2);
+    };
+    auto convert = [&](const std::string& kind, const std::string& s, const std::string& what) -> Value {
+        if (kind == "int") {
+            int64_t v = 0;
+            auto r = std::from_chars(s.data(), s.data() + s.size(), v);
+            if (r.ec != std::errc() || r.ptr != s.data() + s.size()) fail(what + " should be a whole number, not '" + s + "'");
+            return Value::integer(v);
+        }
+        if (kind == "float" || kind == "num") {
+            char* end = nullptr;
+            double v = std::strtod(s.c_str(), &end);
+            if (s.empty() || *end) fail(what + " should be a number, not '" + s + "'");
+            return Value::number(v);
+        }
+        if (kind == "bool") {
+            if (s == "true" || s == "yes" || s == "1") return Value::boolean(true);
+            if (s == "false" || s == "no" || s == "0") return Value::boolean(false);
+            fail(what + " should be true or false, not '" + s + "'");
+        }
+        return vm.vstr(s);
+    };
+    auto find = [&](const std::string& key) -> int {
+        for (size_t i = 0; i < ps.size(); i++)
+            if (ps[i].name == key) return (int)i;
+        return -1;
+    };
+    std::vector<Value> vals(ps.size(), Value::undef());
+    std::vector<bool> given(ps.size(), false);
+    std::vector<std::vector<Value>> lists(ps.size());
+    std::vector<std::string> positional;
+    bool optionsDone = false;
+    for (size_t k = 0; k < args.size(); k++) {
+        const std::string& s = args[k];
+        if (!optionsDone && s == "--") {
+            optionsDone = true;
+            continue;
+        }
+        if (!optionsDone && (s == "-h" || s == "--help")) {
+            flushOut();
+            if (!doc.empty()) std::printf("%s\n\n", doc.c_str());
+            std::printf("%s\n", usage.c_str());
+            bool head = false;
+            for (auto& p : ps) {
+                if (!p.hasDef && p.kind != "bool") continue;
+                if (!head) std::printf("\noptions:\n");
+                head = true;
+                std::printf("  --%s%s\n", dashed(p.name).c_str(), p.kind == "bool" ? "" : (" (" + p.kind + ")").c_str());
+            }
+            std::fflush(stdout);
+            hardExit(0);
+        }
+        if (!optionsDone && s.size() > 2 && s.compare(0, 2, "--") == 0) {
+            std::string key = s.substr(2), val;
+            bool hasVal = false;
+            size_t eq = key.find('=');
+            if (eq != std::string::npos) {
+                val = key.substr(eq + 1);
+                key = key.substr(0, eq);
+                hasVal = true;
+            }
+            for (auto& c : key)
+                if (c == '-') c = '_';
+            bool neg = false;
+            int pi = find(key);
+            if (pi < 0 && key.rfind("no_", 0) == 0 && (pi = find(key.substr(3))) >= 0) {
+                neg = true;
+                if (ps[(size_t)pi].kind != "bool") pi = -1;
+            }
+            if (pi < 0) fail("unknown option " + s.substr(0, eq == std::string::npos ? s.size() : eq + 2));
+            P& p = ps[(size_t)pi];
+            given[(size_t)pi] = true;
+            if (p.kind == "bool" && !hasVal) {
+                vals[(size_t)pi] = Value::boolean(!neg);
+                continue;
+            }
+            if (!hasVal) {
+                if (k + 1 >= args.size()) fail("--" + dashed(p.name) + " needs a value");
+                val = args[++k];
+            }
+            if (isList(p))
+                lists[(size_t)pi].push_back(convert(elemKind(p), val, "--" + dashed(p.name)));
+            else
+                vals[(size_t)pi] = convert(p.kind, val, "--" + dashed(p.name));
+            continue;
+        }
+        positional.push_back(s);
+    }
+    size_t at = 0;
+    for (size_t pi = 0; pi < ps.size(); pi++) {
+        P& p = ps[pi];
+        if (isList(p)) {
+            while (at < positional.size()) lists[pi].push_back(convert(elemKind(p), positional[at++], p.name));
+            if (lists[pi].empty() && !p.hasDef) fail("missing " + p.name);
+            if (!lists[pi].empty()) vals[pi] = vm.newList(lists[pi]);
+            continue;
+        }
+        if (given[pi] || p.hasDef || p.kind == "bool") continue;
+        if (at >= positional.size()) fail("missing " + p.name);
+        vals[pi] = convert(p.kind, positional[at++], p.name);
+    }
+    if (at < positional.size()) fail("unexpected argument '" + positional[at] + "'");
+    return want < vals.size() ? vals[want] : Value::undef();
 }
 
 NATIVE(n_exit) {
@@ -675,6 +840,7 @@ void registerCore(VM& vm) {
     vm.defineNative("assert", n_assert, 1, 2, "fn(bool, str?)", "Panics if the condition is false.");
     vm.defineNative("assert_eq", n_assert_eq, 2, 3, "fn(any, any, str?)", "Panics unless the two values are equal.");
     vm.defineNative("exit", n_exit, 0, 1, "fn(int?)", "Exits the program with a status code.");
+    vm.defineNative("__main_args", n_main_args, 2, 2, "fn(list, int) -> any", "");
     vm.defineNative("range", n_range, 1, 3, "fn(int, int?, int?) -> range", "range(end), range(start, end) or range(start, end, step), end exclusive.");
     vm.defineNative("ord", n_ord, 1, 1, "fn(str) -> int", "Unicode code point of the first character.");
     vm.defineNative("chr", n_chr, 1, 1, "fn(int) -> str", "The character for a Unicode code point.");

@@ -99,7 +99,7 @@ std::string VM::typeName(Value v) {
     }
     switch (v.o->type) {
         case OT::String: return "str";
-        case OT::List: return "list";
+        case OT::List: return v.o->appendable == 1 ? "array" : "list";
         case OT::Tuple: return "tuple";
         case OT::Map: return "map";
         case OT::Set: return "set";
@@ -133,7 +133,11 @@ static std::string fmtFloat(double d) {
     if (std::isnan(d)) return "nan";
     if (std::isinf(d)) return d > 0 ? "inf" : "-inf";
     char buf[64];
-    auto res = std::to_chars(buf, buf + sizeof(buf), d);
+    // as Python's repr: the shortest digits that read back the same, written out in full
+    // from 1e-4 up to 1e16 and in scientific notation outside that
+    double a = std::fabs(d);
+    auto form = a == 0 || (a >= 1e-4 && a < 1e16) ? std::chars_format::fixed : std::chars_format::scientific;
+    auto res = std::to_chars(buf, buf + sizeof(buf), d, form);
     std::string s(buf, res.ptr);
     if (s.find_first_of(".eEn") == std::string::npos) s += ".0";
     return s;
@@ -178,7 +182,7 @@ std::string VM::toStrDepth(Value v, bool quote, int depth) {
     };
     switch (v.o->type) {
         case OT::String: return quote ? quoteStr(as<ObjString>(v)->s) : as<ObjString>(v)->s;
-        case OT::List: return join(SeqView(*as<ObjList>(v)), "[", "]");
+        case OT::List: return isArray(v) ? join(SeqView(*as<ObjList>(v)), "array([", "])") : join(SeqView(*as<ObjList>(v)), "[", "]");
         case OT::Tuple: {
             auto& items = as<ObjTuple>(v)->items;
             if (items.size() == 1) return "(" + toStrDepth(items[0], true, depth + 1) + ",)";
@@ -356,6 +360,14 @@ bool VM::equals(Value a, Value b) {
         }
         case OT::Time: return as<ObjTime>(a)->epoch == as<ObjTime>(b)->epoch;
         case OT::Instance: {
+            auto* x = as<ObjInstance>(a);
+            auto* y = as<ObjInstance>(b);
+            if (x->cls->isData) {  // data records are equal when their fields are
+                if (x->cls->id != y->cls->id) return false;
+                for (size_t i = 0; i < x->fields.size(); i++)
+                    if (!equals(x->fields[i], y->fields[i])) return false;
+                return true;
+            }
             Value r;
             if (callOperator(a, "==", &b, 1, r)) return truthy(r);
             return false;
@@ -395,6 +407,14 @@ int VM::compare(Value a, Value b) {
         return x.size() < y.size() ? -1 : x.size() > y.size() ? 1 : 0;
     }
     if (a.t == VT::Bool && b.t == VT::Bool) return (int)a.b - (int)b.b;
+    if (isObjType(a, OT::Instance) && isObjType(b, OT::Instance) && as<ObjInstance>(a)->cls->isData &&
+        as<ObjInstance>(a)->cls->id == as<ObjInstance>(b)->cls->id) {  // data records: field by field
+        auto* x = as<ObjInstance>(a);
+        auto* y = as<ObjInstance>(b);
+        for (size_t i = 0; i < x->fields.size(); i++)
+            if (int c = compare(x->fields[i], y->fields[i])) return c;
+        return 0;
+    }
     if (isObjType(a, OT::Time) && isObjType(b, OT::Time)) {
         double x = as<ObjTime>(a)->epoch, y = as<ObjTime>(b)->epoch;
         return x < y ? -1 : x > y ? 1 : 0;
@@ -427,6 +447,13 @@ size_t hashValue(const Value& v) {
             auto* r = static_cast<ObjRange*>(v.o);
             return std::hash<int64_t>()(r->start * 31 + r->end * 17 + r->step);
         }
+        case OT::Instance: {
+            auto* inst = static_cast<ObjInstance*>(v.o);
+            if (!inst->cls->isData) return std::hash<const void*>()(v.o);
+            size_t h = 0x345678 ^ (size_t)inst->cls->id;
+            for (size_t i = 0; i < inst->fields.size(); i++) h = h * 1000003 ^ hashValue(inst->fields[i]);
+            return h;
+        }
         default: return std::hash<const void*>()(v.o);
     }
 }
@@ -452,6 +479,14 @@ bool keyEquals(const Value& a, const Value& b) {
             if (x.size() != y.size()) return false;
             for (size_t i = 0; i < x.size(); i++)
                 if (!keyEquals(x[i], y[i])) return false;
+            return true;
+        }
+        case OT::Instance: {  // data records are the same key when their fields are
+            auto* x = static_cast<ObjInstance*>(a.o);
+            auto* y = static_cast<ObjInstance*>(b.o);
+            if (!x->cls->isData || x->cls->id != y->cls->id) return false;
+            for (size_t i = 0; i < x->fields.size(); i++)
+                if (!keyEquals(x->fields[i], y->fields[i])) return false;
             return true;
         }
         case OT::Error: return static_cast<ObjError*>(a.o)->kind == static_cast<ObjError*>(b.o)->kind;
@@ -622,6 +657,13 @@ Value VM::binaryOp(uint8_t op, Value a, Value b) {
             msg += " (build strings with f\"...{x}\" or x.str)";
         panic(msg);
     };
+    if (isArray(a) || isArray(b)) {
+        // numeric arrays: item by item; == and != too against a number (a mask: xs[xs == 0]),
+        // while two arrays are equal or not as wholes
+        bool eq = op == OP_EQ || op == OP_NE;
+        if ((!eq && op != OP_IS && op != OP_ISNOT && op != OP_IN && op != OP_NOTIN) || (eq && (a.isNum() || b.isNum())))
+            return arrayOp(op, a, b);
+    }
     switch (op) {
         case OP_EQ: return Value::boolean(equals(a, b));
         case OP_NE: return Value::boolean(!equals(a, b));
@@ -940,19 +982,23 @@ Value VM::getIndex(Value obj, Value idx) {
         case OT::List:
         case OT::Tuple: {
             bool isList = obj.o->type == OT::List;
+            if (isArray(obj) && isObjType(idx, OT::List)) return arrayIndex(obj, idx);
             SeqView items;
             seqOf(obj, items);
             if (isObjType(idx, OT::Range)) {
                 auto* r = as<ObjRange>(idx);
+                std::vector<Value> out;
                 if (plainSlice(r)) {
                     size_t lo, hi;
                     sliceBounds(r, items.size(), lo, hi);
-                    std::vector<Value> out(items.begin() + lo, items.begin() + hi);
-                    return isList ? newList(std::move(out)) : newTuple(std::move(out));
+                    out.assign(items.begin() + lo, items.begin() + hi);
+                } else {
+                    for (size_t i : sliceIndices(r, items.size())) out.push_back(items[i]);
                 }
-                std::vector<Value> out;
-                for (size_t i : sliceIndices(r, items.size())) out.push_back(items[i]);
-                return isList ? newList(std::move(out)) : newTuple(std::move(out));
+                if (!isList) return newTuple(std::move(out));
+                Value l = newList(std::move(out));
+                if (isArray(obj)) as<ObjList>(l)->appendable = 1;  // a slice of an array is an array
+                return l;
             }
             if (!idx.isNum()) panic("list index must be an int, got " + typeName(idx));
             return items[normIndex(*this, wholeNumber(*this, idx, "index"), items.size(), typeName(obj))];

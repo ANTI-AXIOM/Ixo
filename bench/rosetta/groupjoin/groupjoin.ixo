@@ -1,0 +1,9 @@
+# Employees joined with their departments, grouped by city: headcount and average salary.
+cities = ["paris", "tokyo", "lima", "oslo"]
+depts = (0..40).map({"id": _, "city": cities[_ * 3 % 4]})
+staff = (0..60_000).map({"name": f"e{_}", "dept": _ * 7 % 40, "salary": 30_000 + _ * 37 % 9000})
+city_of = map(depts.map((_["id"], _["city"])))
+groups = staff.group_by(city_of[_["dept"]])
+avg = fn(people) = people.sum_by(_["salary"]) / people.len
+for city in groups.keys.sort_by(-avg(groups[_]))
+    print(city, groups[city].len, f"{avg(groups[city]):.2f}")

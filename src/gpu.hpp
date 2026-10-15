@@ -45,7 +45,9 @@ struct GNode {
         // expressions
         IntK, FloatK, BoolK, Var, Load /*buf[i]*/, Len /*buf.len*/, ThreadIdx, Neg, Not, Bin, Math,
         // statements
-        Set /*var = e*/, Store /*buf[i] = e*/, If, While, Break, Continue, Return, Block, Nop
+        Set /*var = e*/, Store /*buf[i] = e*/, If, While, Break, Continue, Return, Block, Nop,
+        // groups of 64 threads: wait for the others; a shared array's item (slot: which array)
+        Barrier, SLoad /*sh[i]*/, SStore /*sh[i] = e*/
     } k;
     GTy t = GTy::Void;
     int op = 0;    // Bin: GBin; Math: GMath
@@ -72,6 +74,19 @@ struct GpuKernel {
     std::vector<GTy> vars;  // every variable: the scalar parameters first (copies), then locals
     std::unique_ptr<GNode> body;
     int buffers = 0;  // how many buffer parameters
+    std::vector<std::pair<GTy, uint32_t>> shared;  // shared arrays (one per group of 64): items, length
+    bool groups = false;     // uses gpu.barrier or shared arrays: whole groups of 64 run (no threads skipped)
+    bool unchecked = false;  // unsafe gpu fn: the device doesn't check indexes
+    bool wide = false;       // 64-bit, Ixo's own arithmetic: a map the compiler moved to all cores
+    bool dims = false;       // uses gpu.x/y/z: the last two parameters are the launch's width and height
+    bool outBool = false;    // (a map) the results are bools, as 0 and 1
+    // the gpu fn's own parameters: a vec or a mat is several float parameters of the kernel
+    struct Arg {
+        std::string name;
+        int kind = 0;  // 0 one parameter, 1 vec, 2 mat (4x4)
+        int width = 1;
+    };
+    std::vector<Arg> args;
     // filled by the backends
     std::vector<uint32_t> spirv;
     std::string wgsl;
@@ -80,10 +95,17 @@ struct GpuKernel {
 
 // A kernel from a `gpu fn`; its id, or -1 with an error (and where).
 int gpuCompile(FnDecl* fnd, std::string& err, int& line, int& col);
+struct Decl;
+// gpu xs.map(fn(v) = ...): the lambda as a kernel over items of type elem (the captured
+// variables become scalar parameters); -1 with err if it can't run on the GPU
+int gpuCompileMap(FnDecl* lambda, const std::vector<std::pair<Decl*, GTy>>& captures, GTy elem, std::string& err, int& line,
+                  int& col, bool wide = false);
 GpuKernel* gpuKernel(int id);
 
 // The `gpu` namespace and the launcher built-in.
 void registerGpu(VM& vm);
+struct ObjNamespace;
+void registerCuda(VM& vm, ObjNamespace* gpuNamespace);  // gpu.ptx (cuda.cpp)
 
 // SPIR-V for Vulkan compute (spirv.cpp). Bindings 0..buffers-1: the buffer
 // parameters in order; binding `buffers`: a status word (first bad index + 1);

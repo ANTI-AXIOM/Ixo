@@ -205,6 +205,10 @@ grade = if x > 8 -> "A"
         else "C"
 ```
 
+Comparisons chain as in maths: `0 <= i < n` is `0 <= i and i < n`, with `i` written once.
+The middle of a chain is used twice, so it is a name, a number, a field, an index or
+arithmetic on those.
+
 ## Functions
 
 ```ixo
@@ -256,6 +260,34 @@ fn area(w, h) = w * h
 
 print(save("a.txt", backup: false))
 ```
+
+**Unpacking parameters.** A parameter written in parentheses unpacks the argument:
+
+```ixo
+fn dist((x1, y1), (x2, y2)) = ((x2 - x1) ** 2 + (y2 - y1) ** 2).sqrt
+print(dist((0, 0), (3, 4)), [(1, 2), (3, 4)].map(fn((a, b)) = a * b))   # 5.0 [2, 12]
+```
+
+**`main` and the command line.** When the program's main file has a `fn main`, it runs after
+the file's top-level code. With parameters, the command line fills them:
+
+- a parameter without a default is a value given in order;
+- one with a default is an option: `--top 3` or `--top=3`;
+- a `bool` is a flag: `--upper` (and `--no-upper`);
+- a `list` takes the remaining values.
+
+Values convert to the parameter's type (from its annotation or its default). A wrong or
+missing value prints the usage and exits with 2, and `--help` prints the usage with main's
+docstring. A program that calls `main(...)` itself keeps doing so.
+
+```ixo-fragment
+fn main(words: list[str], top = 5, upper = false)
+    "Counts words and prints the most common ones."
+    counts = words.map(if upper -> _.up else _).counts
+    for (w, n) in counts.pairs.sort_by(-_[1])[..top] -> print(w, n)
+```
+
+`ixo run count.ixo --top 2 apple kiwi apple` prints `apple 2` and `kiwi 1`.
 
 ## Lambdas and the universal underscore
 
@@ -358,6 +390,47 @@ matrix element, or a map with tuple keys.
 keys or set elements; use tuples. The [standard library reference](stdlib.md) lists every
 method.
 
+More helpers:
+
+- `_` skips a value when unpacking: `ip, _, path, _ = line.cut`.
+- `m[k] += v` on a map starts from an empty value when the key is missing (0 for numbers,
+  `""` for strings, `[]` for lists): `for w in words -> counts[w] += 1`.
+- `xs.counts` says how many times each item occurs, as a map in first-seen order.
+- `heap.heap_push(x)` and `heap.heap_pop` keep a list as a min-heap, a priority queue like
+  Python's `heapq`: `heap_pop` gives the smallest item.
+
+```ixo
+counts = {}
+for w in "a b a c a".cut -> counts[w] += 1
+heap = []
+for v in [5, 1, 4] -> heap.heap_push(v)
+print(counts, "a b a".cut.counts, heap.heap_pop)   # {"a": 3, "b": 1, "c": 1} {"a": 2, "b": 1} 1
+```
+
+### Numeric arrays
+
+`xs.array` makes a numeric array from numbers (so do `array(n)`, `array(n, fill)` and
+`array(items)`). Arithmetic and comparisons on an array go item by item, and a plain number
+stands for every item. Everything a list does, an array does too.
+
+```ixo
+xs = [1.0, 2.0, 3.0, 4.0].array
+ys = xs * 2.0 + 1                                  # array([3.0, 5.0, 7.0, 9.0])
+print(ys, xs[xs > 2.0], (xs - 10).abs.max, xs.mean, xs.dot(xs))
+i = (0..5).array
+print(i[i % 2 == 0], i // 2, i == (0..5).array)    # array([0, 2, 4]) array([0, 0, 1, 1, 2]) true
+```
+
+- `+ - * / // % **` and `< <= > >=` work item by item. Against a number, `==` and `!=` give
+  a mask too (`xs[xs == 0]`); two arrays are equal or not as wholes.
+- `xs[mask]` keeps the items where a bool array is true; `xs[positions]` picks items.
+- Methods: `abs`, `sqrt`, `exp`, `ln`, `sin`, `cos`, `floor`, `ceil`, `round`,
+  `clamp(lo, hi)`, `mean`, `dot(ys)`, and `.list` for a plain list again.
+- Large arrays (a million items and more) are worked on by all cores.
+
+Arrays are their own type because `[1, 2] * 3` repeats a list: arithmetic item by item on
+lists would make that ambiguous.
+
 ## Classes
 
 ```ixo
@@ -397,6 +470,27 @@ print(hero.hp, hero.alive)            # 70 true
   instances without fields print as the class name.
 - `x is Point` is true when `x` is an instance of `Point` (it also works with interfaces and
   enums).
+
+### Data records
+
+`data` declares an immutable record in one line; its fields are the names in parentheses.
+
+```ixo
+data Point(x: float, y: float)
+    fn len = (x * x + y * y).sqrt
+
+p = Point(3.0, 4.0)
+q = p.with(y: 0.0)                       # a copy with some fields changed
+print(p, q.len, p == Point(3.0, 4.0))    # Point(x: 3.0, y: 4.0) 3.0 true
+print({p: "seen"}[Point(3.0, 4.0)], [p, q].sort.first)
+```
+
+- Two records are equal when their fields are. They hash by their fields, so they work as
+  map keys and in sets, and they sort field by field.
+- Their fields don't change: `p.x = 1.0` is a compile error (a panic through `any`).
+  `p.with(x: 1.0)` makes the changed copy.
+- Patterns match them as classes: `Point(x, 0.0) -> ...`.
+- Methods may follow, indented, as in a class. A record has no other fields.
 
 ## Operator methods
 
@@ -517,6 +611,20 @@ print(name(Color.Rgb(1, 2, 3)), Color.Green is Color)
   about the variants the arms don't handle: `this match doesn't handle Color.Green`.
 - Export an enum with `*` (`enum Color*`); its variants and methods come with it.
 
+A small enum fits on one line. In patterns, a variant can be written without its enum's
+name when nothing else has that name:
+
+```ixo
+enum Shape = Circle(r) | Rect(w, h) | Empty
+fn area(s) = match s
+    Circle(r) -> 3 * r * r
+    Rect(w, h) -> w * h
+    Empty -> 0
+print([Shape.Circle(1), Shape.Rect(2, 3), Shape.Empty].map(area))   # [3, 6, 0]
+```
+
+Methods can follow the one-line form, indented.
+
 ## Pattern matching
 
 `match` tries each arm in order. An arm is `pattern [if guard] -> statement`, or a pattern
@@ -620,6 +728,28 @@ print(work(false), log)        # done ["open", "work", "flush", "close"]
 
 A `defer` inside a loop body runs at the end of each iteration. Defers don't run when the
 program panics.
+
+### Files that close themselves
+
+`use f = <value>` binds a value and closes it when the block ends, however it ends:
+`f.close` runs as a `defer` would. `fs.open(path, mode)` opens a file to read line by line
+(`"r"`, the default), to write (`"w"`) or to append (`"a"`):
+
+```ixo
+fn save(path, lines)
+    use f = fs.open(path, "w")?
+    for l in lines -> f.write(l + "\n")
+fn count(path)
+    use f = fs.open(path)?
+    n = 0
+    while f.read_line != nil -> n += 1
+    n
+save("lines.tmp", ["a", "b"])?
+print(count("lines.tmp"))                # 2
+fs.drop("lines.tmp")?
+```
+
+A `File` has `read_line` (nil at the end), `lines`, `read`, `write(text)` and `close`.
 
 ## Types
 
@@ -727,6 +857,43 @@ Annotations are also checked while the program runs: passing a `str` to an `int`
 through `any` code panics with a clear message. An `int` is accepted and converted where a
 `float` is expected.
 
+### Strict code
+
+`$strict` on a file's first line, or `strict = true` in the project's `ixo.toml`, makes the
+checker strict:
+
+- Every parameter has a type: an annotation, its default's type, or what every call in the
+  file passes. A function used as a value, or never called, needs annotations; exported
+  functions state their parameter and return types.
+- Using a value that might be `nil` without a check is an error.
+- An error a call can give must be handled (`?`, `!`, `match`), or dropped on purpose with
+  `_ = ...`.
+- A `match` over an enum handles every variant, or has `_ ->`.
+- A `par fn` can't change module variables: each task has its own copy, so the change would
+  be lost.
+- `ffi` calls (raw memory) go inside an `unsafe` block. `ixo check --unsafe` lists those
+  blocks and calls.
+- What `fs.open` or `net.listen` gives is bound with `use`, so it's closed.
+
+```ixo-fragment
+$strict
+fn find(names: list[str], target: str): int?
+    for i, name in names
+        if name == target -> return i
+    nil
+at = find(["a"], "b")
+print(at + 1)         # error: a value that might be nil is used with '+'
+```
+
+Code without `$strict` is gradual, as before: these are warnings, or allowed. A strict
+file can use gradual modules, whose values are checked as they cross. `ixo fmt --annotate`
+writes into a file's signatures the types the checker infers: parameters from their calls,
+results from the bodies.
+
+**Integer overflow.** Ints are 64-bit and wrap around, as in C or in Rust's release builds.
+`ixo test`, and `IXO_CHECK_OVERFLOW=1` for any run, stop at an overflow instead, naming the
+operation.
+
 ## Modules
 
 A file is a module. Only names marked with `*` right after the name are exported:
@@ -814,6 +981,24 @@ ixo build tool.ixo -o dist/tool
 
 The program is checked first, and errors stop the build. Only modules are packed; data files
 the program reads stay outside.
+
+**Other machines.** The packed program is the same everywhere; `--target` puts it on the
+runtime of another system: `windows-x64`, `windows-arm64`, `linux-x64`, `linux-arm64`,
+`macos-x64`, `macos-arm64` or `wasm`.
+
+```text
+ixo build tool.ixo --target linux-arm64                          # the runtime from the cache
+ixo build tool.ixo --target linux-arm64 --runtime path/to/ixo    # ... or given here
+ixo build tool.ixo --target wasm                 # a folder with a web page that runs it
+ixo build tool.ixo --train -- sample.txt         # one run first: the executable starts warm
+```
+
+- The runtime for each target is kept in `~/.ixo/runtimes/<version>/` (`IXO_HOME` moves
+  it). When it isn't there, it is fetched once from the release.
+- `--runtime` gives one directly: an `ixo` executable, or for `wasm` the folder with
+  `ixo.js` and `ixo.wasm`.
+- `--train` runs the program once and packs which functions got hot, so the built
+  executable compiles them early.
 
 ## Concurrency
 
@@ -987,6 +1172,74 @@ print(y.list)                          # [2.0, 4.0, 6.0]
   scalars in a uniform.
 
 `bench/gpu` compares kernels on the GPU, on the CPU fallback, as plain Ixo loops and as C++.
+
+Threads past the launch's count don't run, so a kernel needs no check for that (the
+examples above keep one only to show indexing).
+
+**Maps on the GPU, and on every core.** `gpu` before a `map` runs its lambda as a kernel:
+
+```ixo
+xs = (0..8).map(_ * 1.5)
+k = 2.0
+print(gpu xs.map(fn(v) = v * v + k))     # [2.0, 4.25, 11.0, 22.25, 38.0, 58.25, 83.0, 112.25]
+```
+
+- The lambda is one expression over numbers; the variables it uses from outside come in as
+  numbers.
+- Without `gpu`, such a `map` over a big list of numbers (200,000 items or more) is spread
+  over all cores by itself.
+- It runs with Ixo's own 64-bit arithmetic, so the result is exactly the plain loop's;
+  `IXO_AUTO_PAR=0` turns that off, and `IXO_AUTO_PAR=n` sets the size.
+
+**Groups of threads.** Threads run in groups of 64, which can share memory and wait for
+each other:
+
+- `gpu.local` is a thread's place in its group (0 to 63), `gpu.group` the group's number;
+- `name = gpu.shared_floats(64)` (or `gpu.shared_ints`) makes an array each group shares;
+- `gpu.barrier()` waits until every thread of the group has got there.
+
+A kernel that uses them runs whole groups, so threads past the first buffer's length run
+too: it checks its own indexes.
+
+```ixo
+gpu fn block_sums(xs: buffer[float], sums: buffer[float])
+    tile = gpu.shared_floats(64)
+    i = gpu.index
+    t = gpu.local
+    v = 0.0
+    if i < xs.len -> v = xs[i]
+    tile[t] = v
+    gpu.barrier()
+    step = 32
+    while step > 0
+        if t < step -> tile[t] = tile[t] + tile[t + step]
+        gpu.barrier()
+        step = step // 2
+    if t == 0 -> sums[gpu.group] = tile[0]
+
+sums = gpu.floats(4)
+block_sums(gpu.floats((1..=200).map(_.float)), sums)
+print(sums.list)                         # [2080.0, 6176.0, 10272.0, 1572.0]
+```
+
+**2D and 3D launches.** `gpu.launch((w, h), kernel, args...)`, or `(w, h, d)`, runs w × h
+threads; `gpu.x`, `gpu.y` and `gpu.z` give each thread's place.
+
+**vec and mat in kernels.** Local variables can hold `vec(a, b)` up to `vec(a, b, c, d)`, and
+parameters can be `vec2`, `vec3`, `vec4` or `mat` (4x4). They have `+`, `-`, `*` (and `/` by
+a number), `.x .y .z .w`, `.len`, `.norm`, `.dot(v)`, `m * v` and `m[i, j]`.
+
+**Unchecked and foreign kernels.**
+
+- `unsafe gpu fn` skips the index checks on the device (the CPU fallback keeps them).
+- `buffer.address` is where a buffer's items are in memory, for `ffi` calls that take a
+  pointer.
+- `gpu.ptx(text, name)` loads a kernel written for NVIDIA GPUs (PTX, as nvcc or nvrtc make
+  it) through the CUDA driver. `k.launch(n, [args...])` runs n threads, copying buffers in
+  and back; without an NVIDIA driver, `gpu.ptx` gives an error.
+
+The CPU fallback compiles kernels to machine code on x86-64 and ARM64 (`IXO_GPU_JIT=0` runs
+its register code instead). In the browser playground, kernels run through WebGPU.
 
 ## Memory regions
 
@@ -1168,6 +1421,27 @@ float, 1 per bool, instead of 16); this never shows in what a program does. `IXO
 remembers which functions got hot, so the next run compiles them sooner (`ixo cache clean`
 forgets it); it is off by default because today it measures no gain.
 
+More that happens by itself:
+
+- **Compiling beside the program.** Big functions compile on a thread of their own while the
+  program runs on, and the new code is installed at the next call or loop entry, so
+  compiling doesn't pause the program; small ones compile at once, in microseconds.
+  `IXO_JIT_SYNC=1` compiles everything on the program's thread.
+- **Code kept up to date.** Code that is replaced (compiled again, with or without its type
+  guesses) is freed once nothing runs it. Code made before types were known is made again
+  with them once the function has run a while.
+- **Small functions in place.** A call of a small function of the same module is compiled
+  where it is, without a call. Small means one expression or a few statements, and not
+  recursive there. A small function passed by name to `map`, `keep`, `fold`... runs inside
+  the loop like a lambda. `IXO_INLINE=0` turns that off; debugging and profiling keep every
+  call.
+- **Fewer checks and objects.** In typed machine code, a variable checked once to hold a
+  list isn't checked again until it changes. `a, b = x, y` makes no tuple, and a list of
+  constants that a `for` loop goes over is made once.
+- **Sums in one call.** `for x in xs -> s += x` over numbers adds them all in one call (SIMD
+  for ints), with the loop's result.
+- **Maps on every core**, as described under GPU compute.
+
 ## Tools
 
 | command | what it does |
@@ -1272,3 +1546,20 @@ three so programs behave as before:
 - `//` is integer division (it was the n-th root): use `x.root(n)` for roots.
 - A function declared without parentheses (`fn next`) is called wherever its name is used. To
   pass or return it as a value, declare it with parentheses (`fn next()`) or write `&next`.
+
+## Upgrading to 1.0
+
+Ixo 1.0 adds strict code, `data` records, numeric arrays and the rest of this guide's newer
+parts without taking anything away. A few meanings changed; the old ones were errors or
+rare:
+
+- `a < b < c` compares in a chain (`a < b and b < c`); before, it compared a bool with `c`.
+- `fn main` with parameters takes them from the command line, and arguments it doesn't
+  expect are an error. A program that calls `main(...)` itself is unchanged.
+- `m[k] += v` on a map with a missing key starts from 0 (or `""`, `[]`) instead of
+  panicking.
+- Floats print as Python prints them: `990000000.0`, not `9.9e+08`. Scientific notation is
+  used from `1e16` up and below `1e-4`.
+- `ixo test` stops at an integer overflow.
+
+`ixo fmt --upgrade` still rewrites the 0.5 spellings above.

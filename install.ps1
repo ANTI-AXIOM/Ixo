@@ -3,7 +3,7 @@
 #   irm https://raw.githubusercontent.com/Eqixo/Ixo/main/install.ps1 | iex
 #
 # Settings (environment variables):
-#   IXO_VERSION=v0.5.0     a specific release (default: the latest)
+#   IXO_VERSION=v1.0.0     a specific release (default: the latest)
 #   IXO_HOME               where it goes (default: %LOCALAPPDATA%\Ixo; the binary lands in bin\)
 #   IXO_ARCHIVE=file.zip   install from a downloaded archive instead
 #   IXO_NO_PATH=1          don't add it to the user PATH

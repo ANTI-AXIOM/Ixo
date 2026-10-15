@@ -1,0 +1,6 @@
+missing.conf: using defaults
+port 8080
+host example.org
+timeout 30
+error: line 4: workers is not a number: many
+error: line 6: expected key = value

@@ -46,6 +46,28 @@ gpu fn conv(f: buffer[float], n: buffer[int])
     f[i] = v.abs + v.floor + min(v, 1.0) + max(i, 2) + 4.0.sqrt + v.abs * 2
     n[i] = int(v * 3.0) + abs(i - 3) + min(i, 2) + max(-i, -1)
 
+gpu fn block_sums(xs: buffer[float], sums: buffer[float])
+    tile = gpu.shared_floats(64)
+    i = gpu.index
+    t = gpu.local
+    v = 0.0
+    if i < xs.len -> v = xs[i]
+    tile[t] = v
+    gpu.barrier()
+    step = 32
+    while step > 0
+        if t < step -> tile[t] = tile[t] + tile[t + step]
+        gpu.barrier()
+        step = step // 2
+    if t == 0 -> sums[gpu.group] = tile[0]
+
+gpu fn grid(out: buffer[int], w: int)
+    out[gpu.y * w + gpu.x] = gpu.x * 10 + gpu.y
+
+unsafe gpu fn twice(xs: buffer[int])
+    i = gpu.index
+    xs[i] = xs[i] * 2
+
 cases = []
 fn add_case(name, kernel, scalars, bufs, n, run)
     inputs = bufs.map(_.list)
@@ -68,4 +90,11 @@ add_case("mandel", mandel, [64, 47, 64], [m], 64 * 47, fn() = mandel(m, 64, 47, 
 cf = gpu.floats(6)
 cn = gpu.ints(6)
 add_case("conv", conv, [], [cf, cn], 6, fn() = conv(cf, cn))
+bx = gpu.floats((1..=200).map(_.float))
+bs = gpu.floats(4)
+add_case("groups", block_sums, [], [bx, bs], 200, fn() = block_sums(bx, bs))
+go = gpu.ints(6)
+add_case("grid", grid, [3, 3, 2], [go], 6, fn() = gpu.launch((3, 2), grid, go, 3))
+ti = gpu.ints([1, 2, 3])
+add_case("unchecked", twice, [], [ti], 3, fn() = twice(ti))
 print(json.str(cases))

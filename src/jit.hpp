@@ -86,6 +86,8 @@ struct JitCode {
     // in, they go back to it once, to learn their types (then are compiled again)
     std::unique_ptr<uint8_t[]> learned;
     uint8_t relearn = 0;  // set when one did: compile again at the next loop entry
+    void* mem = nullptr;  // its machine code (freed with jitFreeCode once no one runs it)
+    size_t bytes = 0;
 };
 
 bool jitSupported();  // this CPU/OS can run the generated code
@@ -96,6 +98,14 @@ bool jitCompile(ObjFunction* fn, ObjClosure* self, JitCode& out, std::string* wh
                 const std::vector<std::pair<uint32_t, int>>& seeds = {}, VM* vm = nullptr);
 // Can this function be compiled at all (ignoring runtime facts)? "" if so.
 std::string jitCheck(ObjFunction* fn);
+// The compiler thread: compiles from copies of what the program changes as it runs
+// (the type profile, the inline caches, the loop entries), taken when it asked.
+struct InlineCache;
+bool jitCompileFrom(ObjFunction* fn, ObjClosure* self, JitCode& out, std::string* why,
+                    const std::vector<std::pair<uint32_t, int>>& seeds, VM* vm, const std::vector<uint8_t>* profile,
+                    const std::vector<InlineCache>* ics, bool noTier2);
+void* jitAllocExec(const std::vector<uint8_t>& code);  // executable memory, for the program's life (kernels)
+void jitFreeCode(JitCode* code);  // code no one runs any more: its memory is reused, then the object deleted
 // The compiled function and bytecode offset at a machine code address (for the
 // profiler, on the VM's thread). False if the address isn't compiled code.
 bool jitFindPc(uintptr_t pc, ObjFunction** fn, uint32_t* offset);

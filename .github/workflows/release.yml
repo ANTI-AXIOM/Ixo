@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.5.0 to build the binaries and the VS Code extension and
+# Push a tag like v1.0.0 to build the binaries and the VS Code extension and
 # attach them to a draft GitHub release. Nothing is published until the draft
 # is published by hand. The extension also goes to the VS Code Marketplace
 # when the repository has a VSCE_PAT secret (and to Open VSX with OVSX_PAT).

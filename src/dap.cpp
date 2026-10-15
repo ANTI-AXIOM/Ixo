@@ -1318,6 +1318,7 @@ private:
                 output("stderr", s);
             };
             Diagnostics diags;
+            prog.vm.noInline = true;  // every function steps and shows in the stack
             ModuleUnit* m = prog.loadFile(program, diags, prog.opts);
             if (!m) {
                 output("stderr", "ixo: can't read '" + program + "'\n");

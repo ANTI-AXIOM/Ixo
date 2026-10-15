@@ -1,0 +1,18 @@
+# A small domain model: shapes with an area and a perimeter, summarized.
+enum Shape = Circle(r) | Rect(w, h) | Triangle(a, b, c)
+    fn area = match self
+        Circle(r) -> 3.141592653589793 * r * r
+        Rect(w, h) -> w * h
+        Triangle(a, b, c)
+            s = (a + b + c) / 2
+            (s * (s - a) * (s - b) * (s - c)).sqrt
+    fn perimeter = match self
+        Circle(r) -> 2 * 3.141592653589793 * r
+        Rect(w, h) -> 2 * (w + h)
+        Triangle(a, b, c) -> a + b + c
+
+shapes = (0..30_000).map(fn(i) = match i % 3
+    0 -> Shape.Circle(i % 7 + 1)
+    1 -> Shape.Rect(i % 5 + 1, i % 9 + 1)
+    _ -> Shape.Triangle(3, 4, i % 4 + 2))
+print(f"{shapes.sum_by(_.area):.3f}", f"{shapes.sum_by(_.perimeter):.3f}", shapes.count(_.area > 50))

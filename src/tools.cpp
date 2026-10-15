@@ -318,6 +318,8 @@ int runTests(const std::vector<std::string>& args) {
         std::string src = readFile(f, &ok);
         if (!ok || src.find("@test") == std::string::npos) continue;
         Program prog;
+        prog.vm.checkOverflow = true;  // tests stop at an integer overflow
+        prog.vm.jitOn = false;
         Diagnostics diags;
         CompileOptions o = prog.opts;
         o.isEntry = false;
@@ -947,8 +949,31 @@ int upgradeSource(const std::string& src, const std::string& file, std::string& 
     return total;
 }
 
+// ixo fmt --annotate: writes the types the checker inferred into the signatures
+static bool annotateSource(const std::string& file, const std::string& src, std::string& out, std::string& err) {
+    Program prog;
+    prog.opts.compile = false;
+    prog.opts.inferParams = true;
+    Diagnostics diags;
+    ModuleUnit* m = prog.loadFile(file, diags, prog.opts);
+    if (!m) {
+        err = "can't read it";
+        return false;
+    }
+    if (diags.hasErrors()) {
+        err = "fix its errors first (ixo check)";
+        return false;
+    }
+    std::vector<TextEdit> edits = m->annotations;
+    std::sort(edits.begin(), edits.end(), [](const TextEdit& a, const TextEdit& b) { return a.start > b.start; });
+    out = src;
+    for (auto& e : edits)
+        if (e.start <= out.size()) out.insert(e.start, e.text);
+    return true;
+}
+
 int runFormatter(const std::vector<std::string>& args) {
-    bool check = false, upgrade = false, noFormat = false;
+    bool check = false, upgrade = false, noFormat = false, annotate = false;
     std::vector<std::string> files;
     for (auto& a : args) {
         if (a == "--check")
@@ -957,11 +982,13 @@ int runFormatter(const std::vector<std::string>& args) {
             upgrade = true;
         else if (a == "--no-format")
             noFormat = true;  // with --upgrade: only rewrite old spellings
+        else if (a == "--annotate")
+            annotate = true;
         else
             collectFiles(a, files);
     }
     if (files.empty()) {
-        std::fprintf(stderr, "usage: ixo fmt [--check] [--upgrade] <files or dirs>   (use - for stdin)\n");
+        std::fprintf(stderr, "usage: ixo fmt [--check] [--upgrade] [--annotate] <files or dirs>   (use - for stdin)\n");
         return 2;
     }
     int changed = 0, failed = 0;
@@ -980,6 +1007,17 @@ int runFormatter(const std::vector<std::string>& args) {
         }
         std::string out, err;
         int upgraded = 0;
+        const std::string original = src;
+        if (annotate && f != "-") {
+            std::string annotated;
+            if (!annotateSource(f, src, annotated, err)) {
+                std::fprintf(stderr, "ixo fmt --annotate: %s: %s\n", f.c_str(), err.c_str());
+                failed++;
+                continue;
+            }
+            src.swap(annotated);
+            err.clear();
+        }
         if (upgrade) {
             std::string up;
             upgraded = upgradeSource(src, f == "-" ? "stdin.ixo" : f, up);
@@ -1002,7 +1040,7 @@ int runFormatter(const std::vector<std::string>& args) {
             std::fwrite(out.data(), 1, out.size(), stdout);
             continue;
         }
-        if (out == src) continue;
+        if (out == original) continue;
         changed++;
         if (check) {
             std::printf("would reformat %s\n", f.c_str());
@@ -1015,7 +1053,9 @@ int runFormatter(const std::vector<std::string>& args) {
             }
             std::fwrite(out.data(), 1, out.size(), fp);
             std::fclose(fp);
-            if (upgraded)
+            if (annotate)
+                std::printf("annotated %s\n", f.c_str());
+            else if (upgraded)
                 std::printf("upgraded %s (%d change%s)\n", f.c_str(), upgraded, upgraded == 1 ? "" : "s");
             else
                 std::printf("formatted %s\n", f.c_str());

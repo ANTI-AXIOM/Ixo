@@ -31,6 +31,9 @@ struct ModuleUnit {
     bool isNative = false;                 // math, fs, ... (namespaces implemented in C++)
     std::vector<std::string> nativeExports;
     bool isPrelude = false;
+    bool strict = false;     // $strict in the file, or strict = true in ixo.toml
+    bool inferParams = false;  // parameters typed by their calls (strict code, ixo fmt --annotate)
+    std::vector<TextEdit> annotations;  // the types the checker inferred, as `: T` insertions (ixo fmt --annotate)
     bool resolving = false;  // import cycle detection
     bool failed = false;
     ModuleRt* rt = nullptr;

@@ -1,0 +1,6 @@
+# gpu before a map runs its lambda as a kernel (on the CPU cores when there's no GPU).
+xs = (0..8).map(_ * 1.5)
+k = 2.0
+print(gpu xs.map(fn(v) = v * v + k))     # expect: [2.0, 4.25, 11.0, 22.25, 38.0, 58.25, 83.0, 112.25]
+print(gpu (0..5).map(_ * 3))             # expect: [0, 3, 6, 9, 12]
+print(gpu [1.0, 4.0, 9.0].array.map(fn(v) = v.sqrt))   # expect: array([1.0, 2.0, 3.0])

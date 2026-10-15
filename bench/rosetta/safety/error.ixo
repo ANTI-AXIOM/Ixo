@@ -1,0 +1,4 @@
+$strict
+# Planted mistake: an ignored error.
+fs.write("/no/such/dir/out.txt", "data")
+print("saved")
